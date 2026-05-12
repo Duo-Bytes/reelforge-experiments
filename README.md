@@ -128,6 +128,11 @@ Main Thread (React + Zustand UI)
 | 10 | Export Pipeline | WebGPU → VideoEncoder → mediabunny/mp4-muxer → OPFS → user download | `VideoEncoder`, `showSaveFilePicker`, muxer comparison | 05, 07 | High |
 | 11 | AI Background Removal | Client-side segmentation at <100ms/frame via ONNX WebGPU; mask composited in WGSL | `onnxruntime-web`, ONNX WebGPU EP, `Cache API` | 04 | High |
 | 12 | Integration | Full mini-NLE: import → proxy → multi-track timeline → play/seek → AI → export | All above | 01–11 | Very High |
+| 13 | Color Management & HDR | BT.709 SDR + Display-P3 + HDR10/PQ composited correctly into a selectable target color space | `GPUCanvasContext.configure({colorSpace,toneMapping})`, `VideoFrame.colorSpace`, WGSL PQ/HLG/sRGB EOTF/OETF | 03, 04 | High |
+| 14 | WebCodecs Backpressure & VideoFrame Lifetime | 4K60 sustained decode→GPU→close without VRAM growth; deliberate-leak harness | `VideoDecoder.decodeQueueSize`, `VideoFrame.close()` | 03, 06 | Medium |
+| 15 | GPU Device-Lost Recovery | Force `device.lost`; rebuild every resource from a registry; resume in <1 s; survive scripted loss loop | `GPUDevice.lost`, `requestAdapter` re-request, resource registry pattern | 04, 05 | High |
+| 16 | Project Format, Autosave & Crash Recovery | Versioned OPFS schema with write-ahead journal; reopen after tab-kill replays journal | OPFS sync handles, JSON action log, schema migrator | 01, 09 | Medium |
+| 17 | Codec Coverage & HW-Accel Probe | Full `isConfigSupported` matrix → capability profile the rest of the app branches on | `VideoDecoder/VideoEncoder.isConfigSupported`, `navigator.gpu.requestAdapter().info` | 03, 07 | Low |
 
 ---
 
@@ -143,6 +148,13 @@ Build strictly in this sequence. Each app is standalone under `apps/exp-XX-name/
            09  (independent — build anytime after you understand Zustand)
            04 ── 11
            01–11 ── 12
+
+# Risk-driven follow-ups (independent; build in priority order)
+           03,04 ── 13       (color management & HDR)
+           03,06 ── 14       (backpressure & VideoFrame lifetime)
+           04,05 ── 15       (device-lost recovery)
+           01,09 ── 16       (project format & crash recovery)
+           03,07 ── 17       (codec coverage & HW-accel probe)
 ```
 
 **Do not skip experiments.** Each one exposes specific pitfalls (memory leaks, API limits, browser quirks) that will silently break the next experiment if not understood first.
@@ -236,3 +248,8 @@ An experiment is complete when:
 - [10 · Export Pipeline](./docs/exp-10-export-pipeline.md)
 - [11 · AI Background Removal](./docs/exp-11-ai-background.md)
 - [12 · Integration](./docs/exp-12-integration.md)
+- [13 · Color Management & HDR](./docs/exp-13-color-management.md)
+- [14 · WebCodecs Backpressure & VideoFrame Lifetime](./docs/exp-14-backpressure.md)
+- [15 · GPU Device-Lost Recovery](./docs/exp-15-device-lost.md)
+- [16 · Project Format, Autosave & Crash Recovery](./docs/exp-16-project-format.md)
+- [17 · Codec Coverage & HW-Accel Probe](./docs/exp-17-codec-probe.md)
