@@ -133,6 +133,38 @@ Main Thread (React + Zustand UI)
 | 15 | GPU Device-Lost Recovery | Force `device.lost`; rebuild every resource from a registry; resume in <1 s; survive scripted loss loop | `GPUDevice.lost`, `requestAdapter` re-request, resource registry pattern | 04, 05 | High |
 | 16 | Project Format, Autosave & Crash Recovery | Versioned OPFS schema with write-ahead journal; reopen after tab-kill replays journal | OPFS sync handles, JSON action log, schema migrator | 01, 09 | Medium |
 | 17 | Codec Coverage & HW-Accel Probe | Full `isConfigSupported` matrix → capability profile the rest of the app branches on | `VideoDecoder/VideoEncoder.isConfigSupported`, `navigator.gpu.requestAdapter().info` | 03, 07 | Low |
+| 32 | On-Device Silence & Filler-Word Removal | VAD on-device produces a frame-accurate EDL with zero audio upload | `onnxruntime-web` WebGPU EP, `OfflineAudioContext`, Silero-VAD ONNX | 08, 11 | Medium |
+| 33 | On-Device Voice Isolation / Denoise | Studio-Sound-grade denoise on-device; AB toggle + render-to-OPFS | `onnxruntime-web` WebGPU EP, `AudioWorkletNode`, DeepFilterNet3 ONNX | 08, 11 | Medium |
+| 34 | Saliency-Driven Auto-Reframe | 16:9 → 9:16 / 1:1 / 4:5 reformat with on-device subject tracking | ONNX saliency, `VideoFrame.copyTo`, WGSL crop+rescale, Catmull-Rom smoothing | 04, 11 | Medium |
+| 35 | WebGPU Compute Scopes | Luma WFM, RGB parade, vectorscope, histogram via WGSL compute | `GPUComputePipeline`, atomic `r32uint` bins, `bitmaprenderer` mirror | 04, 05, 13 | Medium |
+| 36 | Hardware Control Surfaces | X-Touch Mini → lift/gamma/gain; ShuttlePro → jog/scrub; zero install | `navigator.requestMIDIAccess`, `navigator.hid.requestDevice`, per-device parsers | 04, 09 | Low |
+| 37 | Provable Privacy Mode | CSP lockdown + live audit panel proves zero outbound bytes per session | Service Worker `fetch` interception, strict CSP `connect-src 'none'`, `PerformanceObserver`, attestation export | — | Low |
+| 38 | Plugin / Effect SDK | WGSL + JSON Schema plugins in a sandbox worker, hot-reload < 200 ms | `Worker` (module), `device.createShaderModule`, `FileSystemObserver`, WGSL preprocessor | 04, 05, 23 | High |
+| 39 | On-Device Smart-Cut | Long-form → top-N ranked short candidates, on-device, frame-accurate | Whisper-tiny / Moonshine via `onnxruntime-web`, low-res WebCodecs decode, score reweight | 25, 26, 23 | High |
+
+---
+
+## Competitive-Edge Experiments (32 → 39)
+
+Experiments 13–17 hardened the substrate. Experiments 32–39 turn that
+substrate into shipping features that competitors **cannot match without
+rearchitecting their business**:
+
+- **32 silence-cut**, **33 voice-isolate**, **39 smart-cut** — beat
+  Descript / Opus Clip / Submagic by running their flagship AI on-device
+  with zero upload.
+- **34 auto-reframe** — beat CapCut AutoCut on latency + privacy with
+  the same model class.
+- **35 scopes** — DaVinci-grade browser color tooling that no
+  competitor ships.
+- **36 control-surfaces** — WebMIDI + WebHID hardware support; cloud
+  editors literally cannot deliver this without a native install.
+- **37 privacy-proof** — the marketing differentiator no upload-based
+  editor can credibly claim.
+- **38 plugin-sdk** — the long-term moat once feature parity lands.
+
+Strategy + market map + per-experiment rationale lives in
+[`docs/research-competitive-edge.md`](./docs/research-competitive-edge.md).
 
 ---
 
@@ -155,6 +187,18 @@ Build strictly in this sequence. Each app is standalone under `apps/exp-XX-name/
            04,05 ── 15       (device-lost recovery)
            01,09 ── 16       (project format & crash recovery)
            03,07 ── 17       (codec coverage & HW-accel probe)
+
+# Competitive-edge experiments (32–39). Recommended order:
+# front-load the cheap, provably differentiating wins so the demo
+# reel exists before the harder AI integrations land.
+                  ── 37       (privacy proof — pure marketing leverage)
+           04,05,13 ── 35     (GPU scopes)
+              04,09 ── 36     (hardware control surfaces)
+              04,11 ── 34     (auto-reframe)
+              08,11 ── 32     (silence + filler cut)
+              08,11 ── 33     (voice isolation)
+        25,26,23   ── 39       (smart-cut)
+        04,05,23   ── 38       (plugin SDK)
 ```
 
 **Do not skip experiments.** Each one exposes specific pitfalls (memory leaks, API limits, browser quirks) that will silently break the next experiment if not understood first.
@@ -253,3 +297,13 @@ An experiment is complete when:
 - [15 · GPU Device-Lost Recovery](./docs/exp-15-device-lost.md)
 - [16 · Project Format, Autosave & Crash Recovery](./docs/exp-16-project-format.md)
 - [17 · Codec Coverage & HW-Accel Probe](./docs/exp-17-codec-probe.md)
+- [32 · On-Device Silence & Filler-Word Removal](./docs/exp-32-silence-cut.md)
+- [33 · On-Device Voice Isolation / Denoise](./docs/exp-33-voice-isolate.md)
+- [34 · Saliency-Driven Auto-Reframe](./docs/exp-34-auto-reframe.md)
+- [35 · WebGPU Compute Scopes](./docs/exp-35-scopes.md)
+- [36 · Hardware Control Surfaces (WebMIDI + WebHID)](./docs/exp-36-control-surfaces.md)
+- [37 · Provable Privacy Mode](./docs/exp-37-privacy-proof.md)
+- [38 · Plugin / Effect SDK](./docs/exp-38-plugin-sdk.md)
+- [39 · On-Device Smart-Cut (Long-form → Short-form)](./docs/exp-39-smart-cut.md)
+
+Strategy: [Competitive-Edge Research (May 2026)](./docs/research-competitive-edge.md)
