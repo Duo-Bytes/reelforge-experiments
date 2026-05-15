@@ -33,6 +33,8 @@ export type SessionHandles = {
   videoWritable: FileSystemWritableFileStream;
   chunks: ChunkIndexEntry[];
   byteOffset: number;
+  /** Serialises concurrent appendChunk calls so writes don't race on byteOffset. */
+  writeQueue: Promise<void>;
 };
 
 async function getCapturesDir(): Promise<FileSystemDirectoryHandle> {
@@ -53,6 +55,7 @@ export async function openSession(meta: SessionMeta): Promise<SessionHandles> {
     videoWritable: writable,
     chunks: [],
     byteOffset: 0,
+    writeQueue: Promise.resolve(),
   };
 }
 
@@ -63,25 +66,37 @@ export async function appendChunk(
   duration: number,
   kf: boolean,
 ): Promise<void> {
+  // Serialise: capture the prior tail, chain our work onto it, and
+  // publish the new tail before awaiting. Concurrent callers see the
+  // updated tail and chain after us — preventing byteOffset races and
+  // out-of-order writes to the OPFS stream.
   const view = new Uint8Array(data);
-  await session.videoWritable.write({
-    type: "write",
-    position: session.byteOffset,
-    data: view,
-  } as FileSystemWriteChunkType);
-  const entry: ChunkIndexEntry = {
-    ts,
-    dur: duration,
-    kf,
-    byteOffset: session.byteOffset,
-    byteLength: view.byteLength,
-  };
-  session.chunks.push(entry);
-  session.byteOffset += view.byteLength;
-  // Persist chunks.json after every ~30 entries; flush sooner for keyframes.
-  if (kf || session.chunks.length % 30 === 0) {
-    await writeJson(session.dir, "chunks.json", session.chunks);
-  }
+  const prior = session.writeQueue;
+  const next = (async () => {
+    await prior;
+    const offset = session.byteOffset;
+    await session.videoWritable.write({
+      type: "write",
+      position: offset,
+      data: view,
+    } as FileSystemWriteChunkType);
+    const entry: ChunkIndexEntry = {
+      ts,
+      dur: duration,
+      kf,
+      byteOffset: offset,
+      byteLength: view.byteLength,
+    };
+    session.chunks.push(entry);
+    session.byteOffset = offset + view.byteLength;
+    if (kf || session.chunks.length % 30 === 0) {
+      await writeJson(session.dir, "chunks.json", session.chunks);
+    }
+  })();
+  // Swallow errors on the queue so a single failure doesn't poison
+  // subsequent appends; the caller still sees the rejection via `await`.
+  session.writeQueue = next.catch(() => undefined);
+  await next;
 }
 
 export async function closeSession(

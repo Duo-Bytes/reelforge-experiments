@@ -461,8 +461,12 @@ function CurveEditor({
   ) => void;
 }) {
   const inst = stack[sel.effectIdx];
-  const track = inst.tracks[sel.paramKey];
-  const kf = track[sel.kfIdx];
+  const track = inst?.tracks[sel.paramKey];
+  const kf = track?.[sel.kfIdx];
+  if (!inst || !track || !kf) {
+    // Selection became stale (effect moved/removed, keyframe deleted). Close.
+    return null;
+  }
   // SVG is in normalised coords; tangent x is seconds, y is value units.
   const W = 320;
   const H = 160;

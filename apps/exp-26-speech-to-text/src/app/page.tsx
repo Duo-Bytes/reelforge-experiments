@@ -106,6 +106,10 @@ export default function Page() {
         lastProgressTimeRef.current = transcribeStartRef.current;
         const result = await new Promise<{ words: WordTimestamp[]; ms: number }>(
           (resolve, reject) => {
+            const cleanup = () => {
+              worker.removeEventListener("message", onMessage);
+              worker.removeEventListener("error", onError);
+            };
             const onMessage = (e: MessageEvent) => {
               const data = e.data as
                 | { id: number; kind: "progress"; done: number; total: number }
@@ -126,12 +130,12 @@ export default function Page() {
                   total: data.total,
                 });
               } else {
-                worker.removeEventListener("message", onMessage);
+                cleanup();
                 resolve({ words: data.words, ms: data.ms });
               }
             };
             const onError = (ev: ErrorEvent) => {
-              worker.removeEventListener("error", onError);
+              cleanup();
               reject(new Error(ev.message));
             };
             worker.addEventListener("message", onMessage);

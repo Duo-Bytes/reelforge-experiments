@@ -215,6 +215,20 @@ function CaptureCard({
         setStats(pipeline.getStats());
       }, 250);
     } catch (err) {
+      // Tear down any partially-acquired stream / video element so we don't
+      // leak the camera/screen capture when startPipeline rejects.
+      const s = streamRef.current;
+      streamRef.current = null;
+      if (s) {
+        for (const t of s.getTracks()) {
+          try {
+            t.stop();
+          } catch {
+            // ignore
+          }
+        }
+      }
+      if (videoRef.current) videoRef.current.srcObject = null;
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [kind, codec, deviceId, onSessionChange]);

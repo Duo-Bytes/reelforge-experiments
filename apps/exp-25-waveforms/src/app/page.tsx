@@ -102,14 +102,18 @@ export default function Page() {
           result: ArrayBuffer;
           buildMs: number;
         }>((resolve, reject) => {
+          const cleanup = () => {
+            worker.removeEventListener("message", onMessage);
+            worker.removeEventListener("error", onError);
+          };
           const onMessage = (e: MessageEvent) => {
             const data = e.data as { id: number; result: ArrayBuffer; buildMs: number };
             if (data.id !== id) return;
-            worker.removeEventListener("message", onMessage);
+            cleanup();
             resolve({ result: data.result, buildMs: data.buildMs });
           };
           const onError = (ev: ErrorEvent) => {
-            worker.removeEventListener("error", onError);
+            cleanup();
             reject(new Error(ev.message));
           };
           worker.addEventListener("message", onMessage);
