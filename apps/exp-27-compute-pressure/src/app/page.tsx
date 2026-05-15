@@ -119,7 +119,7 @@ export default function Page() {
       c.stop();
       composerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   // Draw history graph.

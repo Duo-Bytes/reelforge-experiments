@@ -62,7 +62,7 @@ function bgrToCss(bgrHex: string): string {
   // Format: &HBBGGRR& or &HAABBGGRR&
   const m = bgrHex.match(/^&H([0-9A-Fa-f]{1,8})&?$/);
   if (!m) return "white";
-  let hex = m[1].padStart(8, "0");
+  const hex = m[1].padStart(8, "0");
   // AABBGGRR. Alpha is "transparency" in ASS — 00=opaque, FF=transparent.
   const a = 255 - parseInt(hex.slice(0, 2), 16);
   const b = parseInt(hex.slice(2, 4), 16);

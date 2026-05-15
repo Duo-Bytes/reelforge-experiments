@@ -185,7 +185,6 @@ export default function Page() {
   // Lock snapshot poller (diagnostic; navigator.locks.query()).
   useEffect(() => {
     if (!supported) return;
-    let timer: number | undefined;
     const poll = async () => {
       if (!navigator.locks?.query) return;
       try {
@@ -208,9 +207,9 @@ export default function Page() {
       }
     };
     void poll();
-    timer = window.setInterval(poll, 750);
+    const timer = window.setInterval(poll, 750);
     return () => {
-      if (timer !== undefined) window.clearInterval(timer);
+      window.clearInterval(timer);
     };
   }, [supported]);
 

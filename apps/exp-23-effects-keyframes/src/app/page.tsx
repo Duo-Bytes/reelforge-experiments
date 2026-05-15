@@ -434,7 +434,7 @@ export default function Page() {
         )}
 
         <footer className="text-[10px] text-zinc-500">
-          Newton's method 8-iter, falls back to bisection if |dx/dt| &lt; 1e-6.
+          Newton&apos;s method 8-iter, falls back to bisection if |dx/dt| &lt; 1e-6.
           Hold keyframes short-circuit the segment evaluator. Project state
           is `structuredClone`-safe — try it in DevTools.
         </footer>
@@ -538,7 +538,7 @@ function CurveEditor({
       </svg>
       <p className="mt-2 text-[10px] text-zinc-500">
         Drag the orange (in) or green (out) handle. Tangent units are
-        seconds × value. The evaluator solves x → t with Newton's method
+        seconds × value. The evaluator solves x → t with Newton&apos;s method
         and reads y at that t.
       </p>
     </section>

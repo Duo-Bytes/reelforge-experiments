@@ -58,7 +58,7 @@ export async function openSession(meta: SessionMeta): Promise<SessionHandles> {
 
 export async function appendChunk(
   session: SessionHandles,
-  data: ArrayBufferLike,
+  data: ArrayBuffer,
   ts: number,
   duration: number,
   kf: boolean,
@@ -68,7 +68,7 @@ export async function appendChunk(
     type: "write",
     position: session.byteOffset,
     data: view,
-  });
+  } as FileSystemWriteChunkType);
   const entry: ChunkIndexEntry = {
     ts,
     dur: duration,

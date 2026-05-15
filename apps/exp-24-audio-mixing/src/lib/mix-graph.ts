@@ -152,7 +152,7 @@ export function stopTracks(graph: MixGraph): void {
   }
 }
 
-export function rms(analyser: AnalyserNode, scratch: Float32Array): number {
+export function rms(analyser: AnalyserNode, scratch: Float32Array<ArrayBuffer>): number {
   analyser.getFloatTimeDomainData(scratch);
   let sum = 0;
   for (let i = 0; i < scratch.length; i += 1) {

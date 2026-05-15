@@ -7,11 +7,34 @@ import { activeCues, parseVtt, type VttCue } from "../lib/vtt";
 
 type Mode = "vtt" | "ass";
 
+// Parse samples once at module load — the inputs are static.
+const parsedVtt: { cues: VttCue[]; error: string | null } = (() => {
+  try {
+    return { cues: parseVtt(SAMPLE_VTT), error: null };
+  } catch (err) {
+    return {
+      cues: [],
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+})();
+
+const parsedAss: { doc: ParsedAss | null; error: string | null } = (() => {
+  try {
+    return { doc: parseAss(SAMPLE_ASS), error: null };
+  } catch (err) {
+    return {
+      doc: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+})();
+
 export default function Page() {
   const [mode, setMode] = useState<Mode>("vtt");
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const error: string | null = parsedVtt.error ?? parsedAss.error;
   const [workerRenderMs, setWorkerRenderMs] = useState<number | null>(null);
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -23,24 +46,8 @@ export default function Page() {
   const playheadRef = useRef(0);
   const modeRef = useRef<Mode>("vtt");
 
-  // Parsing only happens when the sample changes, so memoise.
-  const vttCues: VttCue[] = useMemo(() => {
-    try {
-      return parseVtt(SAMPLE_VTT);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return [];
-    }
-  }, []);
-
-  const assDoc: ParsedAss | null = useMemo(() => {
-    try {
-      return parseAss(SAMPLE_ASS);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      return null;
-    }
-  }, []);
+  const vttCues: VttCue[] = parsedVtt.cues;
+  const assDoc: ParsedAss | null = parsedAss.doc;
 
   const activeVtt = useMemo(() => activeCues(vttCues, playhead), [vttCues, playhead]);
   const activeAss = useMemo(() => {

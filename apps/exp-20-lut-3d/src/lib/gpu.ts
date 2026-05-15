@@ -96,7 +96,7 @@ function f32ToF16(v: number): number {
   const x = new Uint32Array(buf)[0];
   const sign = (x >>> 31) & 0x1;
   let exp = (x >>> 23) & 0xff;
-  let mant = x & 0x7fffff;
+  const mant = x & 0x7fffff;
   if (exp === 0xff) {
     // Inf/NaN.
     return (sign << 15) | (0x1f << 10) | (mant ? 0x200 : 0);

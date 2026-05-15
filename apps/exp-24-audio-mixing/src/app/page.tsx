@@ -79,8 +79,8 @@ export default function Page() {
   const graphRef = useRef<MixGraph | null>(null);
   const buffersRef = useRef<AudioBuffer[] | null>(null);
   const rafRef = useRef<number | null>(null);
-  const scratchRef = useRef<Float32Array>(new Float32Array(1024));
-  const sideScratchRef = useRef<Float32Array>(new Float32Array(512));
+  const scratchRef = useRef<Float32Array<ArrayBuffer>>(new Float32Array(1024));
+  const sideScratchRef = useRef<Float32Array<ArrayBuffer>>(new Float32Array(512));
 
   useEffect(() => {
     let cancelled = false;
