@@ -133,6 +133,20 @@ Main Thread (React + Zustand UI)
 | 15 | GPU Device-Lost Recovery | Force `device.lost`; rebuild every resource from a registry; resume in <1 s; survive scripted loss loop | `GPUDevice.lost`, `requestAdapter` re-request, resource registry pattern | 04, 05 | High |
 | 16 | Project Format, Autosave & Crash Recovery | Versioned OPFS schema with write-ahead journal; reopen after tab-kill replays journal | OPFS sync handles, JSON action log, schema migrator | 01, 09 | Medium |
 | 17 | Codec Coverage & HW-Accel Probe | Full `isConfigSupported` matrix → capability profile the rest of the app branches on | `VideoDecoder/VideoEncoder.isConfigSupported`, `navigator.gpu.requestAdapter().info` | 03, 07 | Low |
+| 18 | Storage Quota & Eviction Drill | OPFS write loop hits `QuotaExceededError`, LRU-evicts proxies, `persist()` at the right moment | `navigator.storage.estimate/persist`, `QuotaExceededError`, OPFS | 01 | Low |
+| 19 | Multi-Tab Coordination via Web Locks | Two tabs negotiate a single OPFS writer; primary fail-over on tab close | `navigator.locks.request`, `BroadcastChannel`, `pagehide` | 01, 16 | Medium |
+| 20 | Color Grading: 3D LUT Sampling | Industry `.cube` LUTs (17/33/65-pt) into `texture_3d` with trilinear filtering, matches DaVinci ramp | `GPUTexture` `dimension:"3d"`, WGSL `textureSampleLevel`, `.cube` parser | 04, 13 | Medium |
+| 21 | Subtitle/Caption Rendering | Burn-in + live overlay of `.ass` (styles, karaoke, positioning) and `.vtt` cues | `OffscreenCanvas` 2D in Worker, libass-WASM, VTT parser | 04, 05 | Medium |
+| 22 | GPU Text Rendering (MSDF) | Arbitrary fonts, kerning, animated transforms at 60fps via SDF atlas | `FontFace.load`, `texture_2d_array<f32>`, WGSL `fwidth` | 04 | High |
+| 23 | Effects/Transitions Framework + Bezier Keyframes | Typed effect params, broken-tangent bezier evaluator, deterministic stacked ordering | WGSL preprocessor, custom bezier evaluator, structured-clone | 04, 09 | High |
+| 24 | Audio Mixing Graph | Multi-track gain/pan/EQ/compression + sidechain ducking glitch-free under 60fps render load | `AudioWorkletNode`, `AudioParam`, `SharedArrayBuffer`, Wasm AudioWorklets | 08 | High |
+| 25 | Waveforms & Filmstrips | Multi-LOD peak files (256/4096/65536) + GOP-thumbnail strips persisted in OPFS | `AudioContext.decodeAudioData`, Worker, low-res WebCodecs decode | 01, 03 | Medium |
+| 26 | On-Device Speech-to-Text | 1-hour file → word-level transcript < real-time via Whisper-tiny / Moonshine | `onnxruntime-web` WebGPU EP, WebNN, AudioWorklet VAD, `OfflineAudioContext` | 08, 11, 21 | High |
+| 27 | Compute-Pressure Adaptive Quality | `PressureObserver` drops preview res / pauses background work before thermal throttle | `PressureObserver` (CPU+GPU), Long Animation Frames | 04, 07 | Low |
+| 28 | Long Animation Frames Budget | Live LoAF observer attributes blocking work; CI fails when median > 50ms | `PerformanceObserver({type:"long-animation-frame"})`, `entry.scripts` | 09, 12 | Low |
+| 29 | Screen / Camera Capture Ingest | `getDisplayMedia` 4K30 + system audio → encoder → OPFS, recoverable on crash | `getDisplayMedia`, `MediaStreamTrackProcessor`, `VideoEncoder` | 03, 10 | Medium |
+| 30 | PWA Install + File Handlers | Open `.mp4/.mov/.reelproj` from OS via `LaunchQueue`; Web Share Target | `manifest.file_handlers`, `LaunchQueue`, `share_target`, Service Worker | 01 | Low |
+| 31 | Snapping Engine + Trim Tools | Frame-accurate magnetic snap + ripple/roll/slip/slide on 500-clip timeline < 16ms latency | `PointerEvent` coalescing, `requestAnimationFrame`, useRef DOM mutation | 09, 25 | Medium |
 | 32 | On-Device Silence & Filler-Word Removal | VAD on-device produces a frame-accurate EDL with zero audio upload | `onnxruntime-web` WebGPU EP, `OfflineAudioContext`, Silero-VAD ONNX | 08, 11 | Medium |
 | 33 | On-Device Voice Isolation / Denoise | Studio-Sound-grade denoise on-device; AB toggle + render-to-OPFS | `onnxruntime-web` WebGPU EP, `AudioWorkletNode`, DeepFilterNet3 ONNX | 08, 11 | Medium |
 | 34 | Saliency-Driven Auto-Reframe | 16:9 → 9:16 / 1:1 / 4:5 reformat with on-device subject tracking | ONNX saliency, `VideoFrame.copyTo`, WGSL crop+rescale, Catmull-Rom smoothing | 04, 11 | Medium |
@@ -187,6 +201,22 @@ Build strictly in this sequence. Each app is standalone under `apps/exp-XX-name/
            04,05 ── 15       (device-lost recovery)
            01,09 ── 16       (project format & crash recovery)
            03,07 ── 17       (codec coverage & HW-accel probe)
+
+# Substrate / framework experiments (18–31). Build as integration needs them.
+              01 ── 18       (storage quota & eviction)
+           01,16 ── 19       (multi-tab web locks)
+           04,13 ── 20       (3D LUT sampling)
+           04,05 ── 21       (subtitles ASS/VTT)
+              04 ── 22       (MSDF text rendering)
+           04,09 ── 23       (effects + bezier keyframes)   # unblocks 38, 39
+              08 ── 24       (audio mixing graph)
+           01,03 ── 25       (waveforms + filmstrips)       # unblocks 31, 39
+        08,11,21 ── 26       (on-device speech-to-text)     # unblocks 39
+           04,07 ── 27       (compute-pressure adapt)
+           09,12 ── 28       (LoAF performance budget)
+           03,10 ── 29       (screen/camera capture)
+              01 ── 30       (PWA file handlers)
+           09,25 ── 31       (snapping + ripple/roll/slip/slide)
 
 # Competitive-edge experiments (32–39). Recommended order:
 # front-load the cheap, provably differentiating wins so the demo
@@ -297,6 +327,20 @@ An experiment is complete when:
 - [15 · GPU Device-Lost Recovery](./docs/exp-15-device-lost.md)
 - [16 · Project Format, Autosave & Crash Recovery](./docs/exp-16-project-format.md)
 - [17 · Codec Coverage & HW-Accel Probe](./docs/exp-17-codec-probe.md)
+- [18 · Storage Quota & Eviction Drill](./docs/exp-18-storage-quota.md)
+- [19 · Multi-Tab Coordination via Web Locks](./docs/exp-19-web-locks.md)
+- [20 · Color Grading: 3D LUT Sampling](./docs/exp-20-lut-3d.md)
+- [21 · Subtitle/Caption Rendering (ASS + WebVTT)](./docs/exp-21-subtitles.md)
+- [22 · GPU Text Rendering (MSDF)](./docs/exp-22-msdf-text.md)
+- [23 · Effects/Transitions Framework + Bezier Keyframes](./docs/exp-23-effects-keyframes.md)
+- [24 · Audio Mixing Graph (Gain/Pan/EQ/Compression/Ducking)](./docs/exp-24-audio-mixing.md)
+- [25 · Waveform Generation & Filmstrip Thumbnails](./docs/exp-25-waveforms.md)
+- [26 · Speech-to-Text / Auto-Captions On-Device](./docs/exp-26-speech-to-text.md)
+- [27 · Compute-Pressure Adaptive Quality](./docs/exp-27-compute-pressure.md)
+- [28 · Long Animation Frames Performance Budget](./docs/exp-28-loaf-budget.md)
+- [29 · Screen / Camera Capture Ingest](./docs/exp-29-capture-ingest.md)
+- [30 · PWA Install + File Handlers + Web Share Target](./docs/exp-30-pwa-files.md)
+- [31 · Snapping Engine + Ripple/Roll/Slip/Slide](./docs/exp-31-snapping-trim.md)
 - [32 · On-Device Silence & Filler-Word Removal](./docs/exp-32-silence-cut.md)
 - [33 · On-Device Voice Isolation / Denoise](./docs/exp-33-voice-isolate.md)
 - [34 · Saliency-Driven Auto-Reframe](./docs/exp-34-auto-reframe.md)
