@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useEditor, getEditor, clipAtTime, timelineToAssetUs, type Clip } from "../store/timeline";
-import { createRingBuffer, ringStats } from "../lib/ringBuffer";
+import { useEditor, getEditor, clipAtTime, timelineToAssetUs, type AssetId } from "../store/timeline";
+import { createRingBuffer } from "../lib/ringBuffer";
 
 type WorkerStatus = "idle" | "starting" | "ready" | "error";
 
@@ -21,6 +21,10 @@ export default function Editor() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioNodeRef = useRef<AudioWorkletNode | null>(null);
   const lastRenderedKeyRef = useRef<string | null>(null);
+  // Files cannot live in the Zustand store (non-serializable, can be huge).
+  // Keep a parallel Map keyed by assetId so workers added after import (audio,
+  // export, AI) can still recover the original File without re-prompting.
+  const filesRef = useRef<Map<AssetId, File>>(new Map());
 
   const [renderStatus, setRenderStatus] = useState<WorkerStatus>("idle");
   const [audioStatus, setAudioStatus] = useState<WorkerStatus>("idle");
@@ -66,6 +70,7 @@ export default function Editor() {
     if (initRef.current) return;
     initRef.current = true;
     setCrossOriginIso(window.crossOriginIsolated);
+    const files = filesRef.current;
 
     // Render worker — owns OffscreenCanvas
     const canvas = canvasRef.current;
@@ -192,6 +197,7 @@ export default function Editor() {
       audioRef.current = null;
       proxyRef.current = null;
       aiRef.current = null;
+      files.clear();
       initRef.current = false;
     };
   }, []);
@@ -249,6 +255,7 @@ export default function Editor() {
     if (!file) return;
     setError(null);
     const fileId = crypto.randomUUID();
+    filesRef.current.set(fileId, file);
     getEditor().addAsset({
       id: fileId,
       name: file.name,
@@ -267,7 +274,24 @@ export default function Editor() {
     setProxyStatus("starting");
   };
 
+  const clearAll = () => {
+    audioRef.current?.postMessage({ type: "STOP" });
+    filesRef.current.clear();
+    reset();
+  };
+
   const startAudio = async () => {
+    const ed = getEditor();
+    const firstAsset = Object.values(ed.assets)[0];
+    if (!firstAsset) {
+      setError("import a clip before starting audio");
+      return;
+    }
+    const file = filesRef.current.get(firstAsset.id);
+    if (!file) {
+      setError(`no cached File for asset ${firstAsset.id}; re-import`);
+      return;
+    }
     const sab = createRingBuffer();
     sabRef.current = sab;
     const ctx = new AudioContext({ latencyHint: "interactive" });
@@ -281,16 +305,12 @@ export default function Editor() {
     audioCtxRef.current = ctx;
     audioNodeRef.current = node;
     setAudioStatus("starting");
-    // Use first asset's File for audio decode (single-source playback in this skeleton).
-    const ed = getEditor();
-    const firstAsset = Object.values(ed.assets)[0];
-    if (!firstAsset) return;
-    // We can't recover the File here — audio decode in this integration is
-    // demonstration-only and requires the user to wire the same File into the
-    // audio worker via a separate import flow (TODO: cache File on import).
-    setError(
-      "audio decode wiring requires storing the File ref alongside the asset; integrate by extending onImport to keep a Map<assetId, File> and pass to audio worker on play",
-    );
+    audioRef.current?.postMessage({
+      type: "START",
+      file,
+      sab,
+      startUs: playheadUsRef.current,
+    });
   };
 
   const togglePlay = () => {
@@ -347,7 +367,7 @@ export default function Editor() {
             </button>
             <button
               type="button"
-              onClick={reset}
+              onClick={clearAll}
               className="rounded border border-zinc-600 px-2 py-1"
             >
               clear

@@ -1,8 +1,13 @@
-// Audio decode + placeholder silence detector for exp-32.
+// Audio decode + on-device silence detection for exp-32.
 //
-// v1 uses an energy-threshold detector so the demo runs end-to-end.
-// v2 swaps the detector body for Silero-VAD ONNX inference (WebGPU EP).
-// The decode + resample stage is the real production path either way.
+// Two paths:
+//   * detectSilenceEnergy — fast RMS-threshold fallback. Used when the VAD
+//     model failed to load or the user explicitly picks it.
+//   * silenceFromVadProbabilities — converts Silero-VAD speech probabilities
+//     into silence segments via hysteresis + min-duration filtering. The
+//     probabilities themselves are produced by the VAD worker.
+//
+// The decode/resample stage is shared.
 
 export type SilenceSegment = { startSec: number; endSec: number };
 
@@ -11,6 +16,12 @@ export type SilenceOpts = {
   minSilenceMs: number;
   paddingMs: number;
 };
+
+// Silero-VAD v5 chunk size at 16 kHz. 512 samples = 32 ms hops.
+export const SILERO_HOP_16K = 512;
+// Mirror of the canonical Silero-VAD weights. ~2.2 MB.
+export const SILERO_VAD_URL =
+  "https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx";
 
 const TARGET_RATE = 16000;
 
@@ -51,8 +62,8 @@ export async function decodeToMono16k(file: File): Promise<{
   };
 }
 
-// Placeholder detector. Replace with Silero-VAD inference for production.
-export function detectSilence(
+/** Energy-RMS silence detection. Cheap fallback when VAD isn't loaded. */
+export function detectSilenceEnergy(
   samples: Float32Array,
   sampleRate: number,
   opts: SilenceOpts,
@@ -89,6 +100,74 @@ export function detectSilence(
       startSec: (silentStart + padSamples) / sampleRate,
       endSec: samples.length / sampleRate,
     });
+  }
+  return out;
+}
+
+export type VadHysteresisOpts = {
+  /** Speech probability above this enters the SPEAKING state. */
+  speechOnProb: number;
+  /** Speech probability below this enters the SILENT state. */
+  speechOffProb: number;
+  /** Drop silence runs shorter than this — they're inter-word pauses. */
+  minSilenceMs: number;
+  /** Shrink each detected silence by this much so we don't clip word tails. */
+  paddingMs: number;
+};
+
+/**
+ * Convert per-hop Silero-VAD speech probabilities into silence segments.
+ *
+ * Schmitt-trigger style hysteresis prevents flapping when probabilities
+ * straddle a single threshold during noisy regions. Then a min-duration
+ * filter drops inter-word pauses, and `paddingMs` shrinks the segment from
+ * both ends so we don't clip plosive tails.
+ */
+export function silenceFromVadProbabilities(
+  probs: Float32Array,
+  hop: number,
+  sampleRate: number,
+  opts: VadHysteresisOpts,
+): SilenceSegment[] {
+  const hopSec = hop / sampleRate;
+  const minSilenceSec = opts.minSilenceMs / 1000;
+  const padSec = opts.paddingMs / 1000;
+
+  const out: SilenceSegment[] = [];
+  let speaking = false;
+  let silentStartHop = 0;
+  let prevSpeechEndHop = 0;
+
+  for (let i = 0; i < probs.length; i++) {
+    const p = probs[i];
+    if (speaking) {
+      if (p < opts.speechOffProb) {
+        speaking = false;
+        silentStartHop = i;
+        prevSpeechEndHop = i;
+      }
+    } else {
+      if (p > opts.speechOnProb) {
+        // Close the silence segment that just ended.
+        const lenSec = (i - silentStartHop) * hopSec;
+        if (lenSec >= minSilenceSec) {
+          const start = silentStartHop * hopSec + padSec;
+          const end = i * hopSec - padSec;
+          if (end > start) out.push({ startSec: start, endSec: end });
+        }
+        speaking = true;
+      }
+    }
+  }
+  // Tail: if we ended silent, emit from last transition to end-of-stream.
+  if (!speaking && probs.length > 0) {
+    const startHop = prevSpeechEndHop || silentStartHop;
+    const lenSec = (probs.length - startHop) * hopSec;
+    if (lenSec >= minSilenceSec) {
+      const start = startHop * hopSec + padSec;
+      const end = probs.length * hopSec;
+      if (end > start) out.push({ startSec: start, endSec: end });
+    }
   }
   return out;
 }

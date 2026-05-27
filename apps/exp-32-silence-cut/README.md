@@ -16,7 +16,12 @@ pnpm --filter exp-32-silence-cut dev
 
 ## Status
 
-v1 scaffold — the pipeline is wired end-to-end with placeholder
-implementations of the most expensive component (model inference / WGSL
-compute pass / etc.). v2 swaps in the production implementation against
-the substrate proven by experiments 01–17.
+v2 — Silero-VAD ONNX (v5, ~2.2 MB) loads via `onnxruntime-web` WebGPU
+EP with a wasm fallback, cached in the `reelforge-models-v1` Cache API
+bucket. Audio decode resamples to 16 kHz mono via `OfflineAudioContext`;
+the worker streams 512-sample (32 ms) hops through a stateful LSTM and
+emits per-hop speech probabilities. `silenceFromVadProbabilities`
+converts the probability stream to silence segments via Schmitt-trigger
+hysteresis + a min-silence-duration filter. An energy-RMS detector
+remains selectable as a fallback. Filler-word classification still
+depends on exp-26 transcripts.
