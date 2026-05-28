@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  computeMotion,
   decodeForAnalysis,
-  fakeTranscript,
   scoreCandidates,
   type Candidate,
   type Transcript,
   type Weights,
+  type Word,
 } from "../lib/smartcut";
 
 const DEFAULT_WEIGHTS: Weights = {
@@ -17,36 +18,106 @@ const DEFAULT_WEIGHTS: Weights = {
   novelty: 0.4,
 };
 
+type Phase = "idle" | "decoding" | "motion" | "loading-model" | "transcribing" | "scoring" | "done";
+
 export default function Page() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const reqIdRef = useRef(0);
   const [fileName, setFileName] = useState("");
   const [duration, setDuration] = useState(0);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [weights, setWeights] = useState<Weights>(DEFAULT_WEIGHTS);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [loadPct, setLoadPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [outboundBytes] = useState(0);
 
-  const handleFile = useCallback(async (file: File) => {
-    setError(null);
-    setFileName(file.name);
-    setBusy(true);
-    try {
-      const decoded = await decodeForAnalysis(file);
-      setDuration(decoded.durationSec);
-      // v1: fakeTranscript stands in for real Whisper output.  v2 wires exp-26.
-      const t = fakeTranscript(decoded.durationSec);
-      setTranscript(t);
-      const cs = scoreCandidates(t, decoded.audioEnergy, decoded.motion, DEFAULT_WEIGHTS);
-      setCandidates(cs);
-      drawTimeline(canvasRef.current, decoded.audioEnergy, decoded.motion, cs);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+  useEffect(() => {
+    const w = new Worker(
+      new URL("../workers/transcribe.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    workerRef.current = w;
+    return () => {
+      w.terminate();
+      workerRef.current = null;
+    };
   }, []);
+
+  const transcribe = useCallback((pcm: Float32Array): Promise<Word[]> => {
+    return new Promise((resolve, reject) => {
+      const worker = workerRef.current;
+      if (!worker) {
+        reject(new Error("worker not ready"));
+        return;
+      }
+      const id = ++reqIdRef.current;
+      const onMessage = (e: MessageEvent) => {
+        const data = e.data as
+          | { id: number; kind: "progress"; phase: "load" | "transcribe"; done: number; total: number }
+          | { id: number; kind: "result"; words: Word[]; ms: number }
+          | { id: number; kind: "error"; message: string };
+        if (data.id !== id) return;
+        if (data.kind === "progress") {
+          if (data.phase === "load") {
+            setPhase("loading-model");
+            setLoadPct(data.done);
+          } else {
+            setPhase("transcribing");
+          }
+        } else if (data.kind === "error") {
+          worker.removeEventListener("message", onMessage);
+          reject(new Error(data.message));
+        } else {
+          worker.removeEventListener("message", onMessage);
+          resolve(data.words);
+        }
+      };
+      worker.addEventListener("message", onMessage);
+      const copy = new Float32Array(pcm);
+      worker.postMessage({ id, pcm: copy }, [copy.buffer]);
+    });
+  }, []);
+
+  const handleFile = useCallback(
+    async (file: File) => {
+      setError(null);
+      setFileName(file.name);
+      setBusy(true);
+      setCandidates([]);
+      try {
+        setPhase("decoding");
+        const decoded = await decodeForAnalysis(file);
+        setDuration(decoded.durationSec);
+
+        setPhase("motion");
+        const motion = await computeMotion(
+          file,
+          decoded.durationSec,
+          decoded.audioEnergy.length,
+        );
+
+        const words = await transcribe(decoded.pcm16k);
+        const t: Transcript = { words, totalSec: decoded.durationSec };
+        setTranscript(t);
+
+        setPhase("scoring");
+        const cs = scoreCandidates(t, decoded.audioEnergy, motion, DEFAULT_WEIGHTS);
+        setCandidates(cs);
+        drawTimeline(canvasRef.current, decoded.audioEnergy, motion, cs);
+        setPhase("done");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("idle");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [transcribe],
+  );
 
   const reweight = useCallback(
     (w: Weights) => {
@@ -90,9 +161,10 @@ export default function Page() {
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Exp-39 · On-Device Smart-Cut</h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Long-form → short-form ranked candidates. v1 ships the scoring +
-            timeline UI against a stub transcript; v2 wires exp-26 Whisper for
-            real word-level transcription. <strong>Never uploads audio.</strong>
+            Long-form → short-form ranked candidates. Real on-device Whisper
+            transcript (Transformers.js, WebGPU EP) + audio RMS energy + video
+            frame-difference motion drive the scorer.{" "}
+            <strong>Never uploads audio or video.</strong>
           </p>
         </header>
 
@@ -123,7 +195,13 @@ export default function Page() {
                 }}
               />
             </label>
-            <span className="text-zinc-500">{busy ? "analyzing…" : "drop a file or browse"}</span>
+            <span className="text-zinc-500">
+              {busy
+                ? phase === "loading-model"
+                  ? `loading model… ${loadPct}%`
+                  : `${phase}…`
+                : "drop a file or browse"}
+            </span>
           </div>
           <canvas
             ref={canvasRef}
@@ -191,10 +269,8 @@ export default function Page() {
         <section className="rounded border border-zinc-300 p-4 text-xs dark:border-zinc-700">
           <h2 className="mb-2 text-sm font-semibold">Next steps</h2>
           <ul className="ml-5 list-disc space-y-1 text-zinc-600 dark:text-zinc-400">
-            <li>Replace <code>fakeTranscript</code> with exp-26 Whisper / Moonshine streaming output.</li>
-            <li>Snap candidate boundaries to sentence start/end from the real transcript.</li>
-            <li>Visual-motion signal via low-res WebCodecs decode (240p, every 2 s).</li>
-            <li>Cache signals so weight-slider drag re-ranks under 100 ms.</li>
+            <li>Snap candidate boundaries to sentence start/end from the transcript.</li>
+            <li>Swap the <code>&lt;video&gt;</code> seek sampler for a low-res WebCodecs decode (faster, frame-accurate).</li>
             <li>&quot;Send to timeline&quot; emits an exp-09 action; animated captions via exp-23 keyframes.</li>
           </ul>
         </section>

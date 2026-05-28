@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
 allowBuilds:
+  onnxruntime-node: false
   protobufjs: true
   sharp: true
   unrs-resolver: true

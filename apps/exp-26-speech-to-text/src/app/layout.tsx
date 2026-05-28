@@ -10,7 +10,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Exp-26 · Speech-to-Text / Auto-Captions On-Device",
   description:
-    "Integration scaffold for on-device transcription: 16k resampling via OfflineAudioContext, chunking, VAD, word-level transcripts. Mock transcriber stands in for Whisper/Moonshine.",
+    "On-device transcription: 16k resampling via OfflineAudioContext, chunking, VAD, and real Whisper/Moonshine inference via Transformers.js on the WebGPU EP. Word-level timestamps. Audio never leaves the machine.",
 };
 
 export default function RootLayout({

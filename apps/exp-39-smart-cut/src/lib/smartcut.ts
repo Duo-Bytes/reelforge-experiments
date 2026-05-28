@@ -1,8 +1,11 @@
 // Smart-cut scoring for exp-39.
 //
-// v1: stub transcript + simple text / audio / motion / novelty heuristics so
-// the UI loop runs end-to-end. v2 wires exp-26 Whisper for real transcripts
-// and a low-res WebCodecs decode for the motion signal.
+// Real signals: word-level transcript from on-device Whisper (see
+// workers/transcribe.worker.ts), audio RMS energy, and mean-frame-
+// difference motion sampled from the decoded video. All scoring runs
+// locally; nothing is uploaded.
+
+const TARGET_RATE = 16000;
 
 export type Word = { t: number; w: string };
 
@@ -32,9 +35,10 @@ export type Candidate = {
   noveltyScore: number;
 };
 
+/** Decode audio → 0.5 s RMS energy windows + 16 kHz mono PCM for ASR. */
 export async function decodeForAnalysis(file: File): Promise<{
   audioEnergy: number[];
-  motion: number[];
+  pcm16k: Float32Array;
   durationSec: number;
 }> {
   const buf = await file.arrayBuffer();
@@ -52,40 +56,116 @@ export async function decodeForAnalysis(file: File): Promise<{
     for (let j = i; j < i + windowSamples; j++) s += ch0[j] * ch0[j];
     energy.push(Math.sqrt(s / windowSamples));
   }
-  // motion stub: pseudo-random from a hash of duration so the UI shows
-  // something coherent. v2: real low-res mean-frame-difference.
-  const motion: number[] = energy.map((_, i) => {
-    const seed = Math.sin(i * 0.317 + decoded.duration) * 43758.5453;
-    return Math.abs(seed - Math.floor(seed));
-  });
-  return { audioEnergy: zscoreNormalize(energy), motion, durationSec: decoded.duration };
+
+  const pcm16k = await resampleTo16kMono(decoded);
+  return {
+    audioEnergy: zscoreNormalize(energy),
+    pcm16k,
+    durationSec: decoded.duration,
+  };
 }
 
-export function fakeTranscript(durationSec: number): Transcript {
-  // Sprinkle "marker words" so the text scorer finds something to lift on.
-  const filler = ["uh", "so", "I", "think", "we", "should", "consider"];
-  const beats = [
-    "the one thing to remember is",
-    "let me ask you a question",
-    "here's what nobody talks about",
-    "the surprising number is",
-    "this is the key insight",
-  ];
-  const words: Word[] = [];
-  let t = 0;
-  while (t < durationSec) {
-    if (Math.random() < 0.02) {
-      const phrase = beats[Math.floor(Math.random() * beats.length)];
-      for (const w of phrase.split(" ")) {
-        words.push({ t, w });
-        t += 0.18;
-      }
-    } else {
-      words.push({ t, w: filler[Math.floor(Math.random() * filler.length)] });
-      t += 0.25;
-    }
+async function resampleTo16kMono(decoded: AudioBuffer): Promise<Float32Array> {
+  const offline = new OfflineAudioContext(
+    1,
+    Math.max(1, Math.ceil(decoded.duration * TARGET_RATE)),
+    TARGET_RATE,
+  );
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  if (decoded.numberOfChannels === 1) {
+    src.connect(offline.destination);
+  } else {
+    const merger = offline.createGain();
+    merger.gain.value = 1 / decoded.numberOfChannels;
+    src.connect(merger);
+    merger.connect(offline.destination);
   }
-  return { words, totalSec: durationSec };
+  src.start();
+  const rendered = await offline.startRendering();
+  return rendered.getChannelData(0);
+}
+
+/**
+ * Real motion signal: mean absolute luma difference between consecutive
+ * sampled frames, one sample per audio-energy window. Video files only;
+ * audio-only inputs return a flat zero array so motion contributes
+ * nothing rather than noise.
+ */
+export async function computeMotion(
+  file: File,
+  durationSec: number,
+  samples: number,
+): Promise<number[]> {
+  if (!file.type.startsWith("video/") || samples <= 0) {
+    return new Array(samples).fill(0);
+  }
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.muted = true;
+  video.crossOrigin = "anonymous";
+  video.preload = "auto";
+  video.src = url;
+
+  const W = 64;
+  const H = 36;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  const seek = (t: number) =>
+    new Promise<void>((resolve, reject) => {
+      const onSeeked = () => {
+        video.removeEventListener("seeked", onSeeked);
+        resolve();
+      };
+      const onErr = () => {
+        video.removeEventListener("error", onErr);
+        reject(new Error("video seek failed"));
+      };
+      video.addEventListener("seeked", onSeeked, { once: true });
+      video.addEventListener("error", onErr, { once: true });
+      video.currentTime = Math.min(t, Math.max(0, durationSec - 0.05));
+    });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      video.addEventListener("loadeddata", () => resolve(), { once: true });
+      video.addEventListener("error", () => reject(new Error("video load failed")), {
+        once: true,
+      });
+    });
+
+    const out: number[] = [];
+    let prev: Uint8ClampedArray | null = null;
+    for (let i = 0; i < samples; i++) {
+      const t = (i + 0.5) * (durationSec / samples);
+      await seek(t);
+      if (!ctx) break;
+      ctx.drawImage(video, 0, 0, W, H);
+      const cur = ctx.getImageData(0, 0, W, H).data;
+      if (prev) {
+        let diff = 0;
+        for (let p = 0; p < cur.length; p += 4) {
+          const lc = 0.299 * cur[p] + 0.587 * cur[p + 1] + 0.114 * cur[p + 2];
+          const lp = 0.299 * prev[p] + 0.587 * prev[p + 1] + 0.114 * prev[p + 2];
+          diff += Math.abs(lc - lp);
+        }
+        out.push(diff / (cur.length / 4) / 255);
+      } else {
+        out.push(0);
+      }
+      prev = cur.slice(0);
+    }
+    return zscoreNormalize(out);
+  } catch {
+    return new Array(samples).fill(0);
+  } finally {
+    URL.revokeObjectURL(url);
+    video.removeAttribute("src");
+    video.load();
+  }
 }
 
 export function scoreCandidates(
@@ -129,18 +209,57 @@ export function scoreCandidates(
   return out;
 }
 
+// Generic engagement signals that survive real ASR output (no reliance on
+// scripted marker phrases): hook phrases, question/curiosity words, numbers,
+// superlatives, and a mild reward for speech density.
+const HOOK_PHRASES = [
+  "the thing is",
+  "here's the",
+  "what nobody",
+  "the key",
+  "the secret",
+  "the truth",
+  "let me",
+  "i'll show you",
+  "you won't believe",
+  "the best",
+  "the worst",
+  "the biggest",
+];
+const CURIOSITY_WORDS = new Set([
+  "why",
+  "how",
+  "what",
+  "secret",
+  "mistake",
+  "surprising",
+  "never",
+  "always",
+  "best",
+  "worst",
+  "first",
+  "most",
+  "huge",
+  "crazy",
+  "actually",
+]);
+
 function computeTextScore(words: Word[]): number {
-  const signals = [
-    "the one thing",
-    "let me ask",
-    "nobody talks",
-    "key insight",
-    "surprising",
-    "question",
-  ];
-  const joined = words.map((w) => w.w).join(" ").toLowerCase();
+  if (words.length === 0) return 0;
+  const joined = words.map((w) => w.w.toLowerCase()).join(" ");
   let score = 0;
-  for (const s of signals) if (joined.includes(s)) score += 1;
+  for (const p of HOOK_PHRASES) if (joined.includes(p)) score += 0.6;
+  let curiosity = 0;
+  let numbers = 0;
+  for (const { w } of words) {
+    const t = w.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (CURIOSITY_WORDS.has(t)) curiosity += 1;
+    if (/\d/.test(w)) numbers += 1;
+  }
+  score += Math.min(1.2, curiosity * 0.15);
+  score += Math.min(0.6, numbers * 0.2);
+  // Mild density reward: a window packed with speech beats near-silence.
+  score += Math.min(0.6, words.length / 120);
   return Math.min(2.5, score);
 }
 

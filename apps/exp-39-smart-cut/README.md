@@ -16,7 +16,19 @@ pnpm --filter exp-39-smart-cut dev
 
 ## Status
 
-v1 scaffold — the pipeline is wired end-to-end with placeholder
-implementations of the most expensive component (model inference / WGSL
-compute pass / etc.). v2 swaps in the production implementation against
-the substrate proven by experiments 01–17.
+v2 — real signals, all on-device:
+
+- **Transcript:** Whisper-tiny via Transformers.js (onnxruntime-web,
+  WebGPU EP, wasm fallback) in `src/workers/transcribe.worker.ts`.
+  Word-level timestamps; model caches after first download.
+- **Audio:** 0.5 s RMS energy windows from `decodeAudioData`.
+- **Motion:** mean absolute luma frame-difference sampled from the
+  decoded video (one sample per energy window); audio-only inputs
+  contribute a flat-zero motion signal.
+- **Scoring:** generic engagement text score (hook phrases, curiosity
+  words, numbers, speech density) + audio + motion + novelty, reweighted
+  live from the cached signals.
+
+Remaining: snap boundaries to sentence edges; replace the `<video>`
+seek sampler with a low-res WebCodecs decode; "send to timeline"
+(exp-09) + animated captions (exp-23).

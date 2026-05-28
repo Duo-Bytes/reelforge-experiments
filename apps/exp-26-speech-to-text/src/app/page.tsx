@@ -98,33 +98,33 @@ export default function Page() {
           transcribeMs: 0,
           words: 0,
         });
-        setProgress({ stage: "transcribe", done: 0, total: chunks.length });
+        setProgress({ stage: "transcribe", done: 0, total: 1 });
         const worker = workerRef.current;
         if (!worker) throw new Error("worker not ready");
         const id = ++reqIdRef.current;
         transcribeStartRef.current = performance.now();
         lastProgressTimeRef.current = transcribeStartRef.current;
+        // Transfer the PCM buffer into the worker (zero-copy).
+        const pcmForWorker = new Float32Array(pcm);
         const result = await new Promise<{ words: WordTimestamp[]; ms: number }>(
           (resolve, reject) => {
             const onMessage = (e: MessageEvent) => {
               const data = e.data as
-                | { id: number; kind: "progress"; done: number; total: number }
-                | { id: number; kind: "result"; words: WordTimestamp[]; ms: number };
+                | { id: number; kind: "progress"; phase: "load" | "transcribe"; done: number; total: number }
+                | { id: number; kind: "result"; words: WordTimestamp[]; ms: number }
+                | { id: number; kind: "error"; message: string };
               if (data.id !== id) return;
               if (data.kind === "progress") {
-                const now = performance.now();
-                const elapsed = now - transcribeStartRef.current;
-                const remaining =
-                  data.done > 0
-                    ? (elapsed / data.done) * (data.total - data.done)
-                    : null;
-                setEta(remaining);
-                lastProgressTimeRef.current = now;
+                lastProgressTimeRef.current = performance.now();
                 setProgress({
-                  stage: "transcribe",
+                  stage: data.phase === "load" ? "decode" : "transcribe",
                   done: data.done,
                   total: data.total,
                 });
+                setEta(null);
+              } else if (data.kind === "error") {
+                worker.removeEventListener("message", onMessage);
+                reject(new Error(data.message));
               } else {
                 worker.removeEventListener("message", onMessage);
                 resolve({ words: data.words, ms: data.ms });
@@ -136,7 +136,9 @@ export default function Page() {
             };
             worker.addEventListener("message", onMessage);
             worker.addEventListener("error", onError);
-            worker.postMessage({ id, chunks });
+            worker.postMessage({ id, pcm: pcmForWorker, model }, [
+              pcmForWorker.buffer,
+            ]);
           },
         );
         setWords(result.words);
@@ -158,7 +160,7 @@ export default function Page() {
         setRunning(false);
       }
     },
-    [],
+    [model],
   );
 
   const onFile = useCallback(
@@ -230,13 +232,13 @@ export default function Page() {
     <main className="min-h-screen bg-zinc-50 p-8 font-mono text-zinc-900 dark:bg-black dark:text-zinc-100">
       <div className="mx-auto max-w-5xl space-y-6">
         <header className="space-y-2">
-          <h1 className="text-3xl font-bold">Exp-26 · Speech-to-Text Scaffold</h1>
+          <h1 className="text-3xl font-bold">Exp-26 · On-Device Speech-to-Text</h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Real 16 kHz mono resampling (OfflineAudioContext), real VAD &amp;
-            chunking, real virtualised transcript display.{" "}
-            <strong>Mock transcriber</strong> stands in for Whisper /
-            Moonshine — swap one function to wire onnxruntime-web on the
-            WebGPU EP.
+            16 kHz mono resampling (OfflineAudioContext) → VAD &amp; chunking →
+            real Whisper/Moonshine transcription via{" "}
+            <strong>Transformers.js on the WebGPU EP</strong>. Model weights
+            download once and cache on-device.{" "}
+            <strong>Audio never leaves the machine.</strong>
           </p>
         </header>
 
@@ -260,7 +262,6 @@ export default function Page() {
                 </option>
               ))}
             </select>
-            <span className="text-zinc-500">(inert placeholder)</span>
           </label>
           <label className="flex items-center gap-2">
             <span className="text-zinc-500">audio:</span>
@@ -326,12 +327,12 @@ export default function Page() {
         </section>
 
         <footer className="text-xs text-zinc-500">
-          The transcript is fake. The chunking, resampling, VAD and
-          virtualised display are real. To wire a real model, replace{" "}
-          <code>transcribeChunk</code> in{" "}
-          <code>src/workers/transcribe.worker.ts</code> with an
-          onnxruntime-web session running Whisper-tiny or Moonshine on the
-          WebGPU EP.
+          Transcription runs Whisper-tiny / Moonshine through Transformers.js
+          on the WebGPU EP inside{" "}
+          <code>src/workers/transcribe.worker.ts</code>. The first run
+          downloads the model (~60–75 MB) and caches it on-device; later runs
+          load from cache. Word timestamps come from Whisper&apos;s
+          cross-attention alignment.
         </footer>
       </div>
     </main>
