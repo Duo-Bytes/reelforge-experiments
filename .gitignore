@@ -27,3 +27,8 @@ pnpm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# local test media (see fixtures/README.md) — keep committed fixtures, ignore the rest
+fixtures/*.mp4
+fixtures/*.mov
+fixtures/*.webm

@@ -29,11 +29,15 @@ This repo is a **pnpm workspace**. Every experiment lives under `apps/exp-XX-nam
 ```
 experiments/
 ├── package.json            # workspace root, packageManager pin
-├── pnpm-workspace.yaml     # apps/* glob
+├── pnpm-workspace.yaml     # apps/* + packages/* globs
 ├── apps/
 │   ├── exp-01-opfs/
 │   ├── exp-02-demuxer/
 │   └── ...
+├── packages/               # shared workspace libs (workspace:* + transpilePackages)
+│   ├── audio/              # @reelforge/audio  — decode/resample/WAV
+│   ├── asr/                # @reelforge/asr    — Transformers.js ASR
+│   └── onnx/               # @reelforge/onnx   — onnxruntime-web WebGPU loader
 └── docs/
 ```
 
@@ -155,6 +159,63 @@ Main Thread (React + Zustand UI)
 | 37 | Provable Privacy Mode | CSP lockdown + live audit panel proves zero outbound bytes per session | Service Worker `fetch` interception, strict CSP `connect-src 'none'`, `PerformanceObserver`, attestation export | — | Low |
 | 38 | Plugin / Effect SDK | WGSL + JSON Schema plugins in a sandbox worker, hot-reload < 200 ms | `Worker` (module), `device.createShaderModule`, `FileSystemObserver`, WGSL preprocessor | 04, 05, 23 | High |
 | 39 | On-Device Smart-Cut | Long-form → top-N ranked short candidates, on-device, frame-accurate | Whisper-tiny / Moonshine via `onnxruntime-web`, low-res WebCodecs decode, score reweight | 25, 26, 23 | High |
+
+---
+
+## Implementation Status
+
+Legend: **✅ real** = production-path implementation; **🟡 skeleton** = wired
+end-to-end but a sub-system is intentionally simplified. *Build* (typecheck +
+`next build`) is verified green for **all** experiments via
+`pnpm -r --no-bail build`. *Output quality* for the WebGPU / AI experiments
+(marked †) still needs a Chrome WebGPU session + real media to confirm — it
+has not been measured here.
+
+| # | Name | Status | Notes |
+|---|---|---|---|
+| 01 | OPFS File System | ✅ real | |
+| 02 | MP4 Demuxer | ✅ real | mp4box + mediabunny; mediabunny path lacks source byte offsets (use mp4box where offsets matter) |
+| 03 | WebCodecs Decode | ✅ real † | |
+| 04 | WebGPU Compositor | ✅ real † | |
+| 05 | OffscreenCanvas Worker | ✅ real † | |
+| 06 | Frame Cache | ✅ real † | |
+| 07 | Proxy Workflow | ✅ real † | |
+| 08 | Audio Sync | ✅ real † | |
+| 09 | Timeline State | ✅ real | |
+| 10 | Export Pipeline | ✅ real † | |
+| 11 | AI Background Removal | ✅ real † | RMBG-1.4 via `@reelforge/onnx` (WebGPU EP) |
+| 12 | Integration | 🟡 skeleton | 5-worker NLE; export + full A/V orchestration stubbed |
+| 13 | Color Management & HDR | ✅ real † | |
+| 14 | Backpressure & VideoFrame Lifetime | ✅ real † | |
+| 15 | GPU Device-Lost Recovery | ✅ real † | |
+| 16 | Project Format & Crash Recovery | ✅ real | includes a "simulate crash" test harness |
+| 17 | Codec Coverage & HW-Accel Probe | ✅ real † | |
+| 18 | Storage Quota & Eviction | ✅ real | |
+| 19 | Multi-Tab Web Locks | ✅ real | |
+| 20 | 3D LUT Sampling | ✅ real † | |
+| 21 | Subtitles (ASS/VTT) | ✅ real | |
+| 22 | GPU Text (MSDF) | ✅ real † | |
+| 23 | Effects + Bezier Keyframes | ✅ real | WGSL preview path is CPU-side in this experiment |
+| 24 | Audio Mixing Graph | ✅ real | |
+| 25 | Waveforms & Filmstrips | ✅ real | |
+| 26 | Speech-to-Text | ✅ real † | Whisper-tiny / Moonshine via `@reelforge/asr` (WebGPU EP) |
+| 27 | Compute-Pressure Adaptive | ✅ real | |
+| 28 | LoAF Budget | ✅ real | |
+| 29 | Screen / Camera Capture | ✅ real | |
+| 30 | PWA File Handlers | ✅ real | |
+| 31 | Snapping + Trim | ✅ real | |
+| 32 | Silence / Filler Removal | ✅ real † | Silero-VAD ONNX via `@reelforge/onnx`; energy fallback; filler pass needs exp-26 |
+| 33 | Voice Isolation / Denoise | ✅ real † | RNNoise WASM; DeepFilterNet3 is the quality-upgrade path |
+| 34 | Auto-Reframe | ✅ real † | YOLOS-tiny via `@reelforge/asr`-style Transformers.js; brightness fallback pre-load |
+| 35 | WebGPU Compute Scopes | ✅ real † | WGSL compute, `atomic<u32>` bins |
+| 36 | Hardware Control Surfaces | ✅ real | WebMIDI + WebHID; X-Touch Mini + ShuttlePro decoders |
+| 37 | Provable Privacy Mode | ✅ real | service worker blocks cross-origin egress; live audit |
+| 38 | Plugin / Effect SDK | ✅ real † | real WGSL compile in a sandbox worker; live preview |
+| 39 | On-Device Smart-Cut | ✅ real † | Whisper transcript + audio energy + video frame-diff motion |
+
+Shared code lives in [`packages/`](./packages): `@reelforge/audio`
+(decode/resample/WAV), `@reelforge/asr` (Transformers.js ASR),
+`@reelforge/onnx` (onnxruntime-web WebGPU session loader + model cache).
 
 ---
 
