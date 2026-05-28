@@ -16,7 +16,16 @@ pnpm --filter exp-37-privacy-proof dev
 
 ## Status
 
-v1 scaffold — the pipeline is wired end-to-end with placeholder
-implementations of the most expensive component (model inference / WGSL
-compute pass / etc.). v2 swaps in the production implementation against
-the substrate proven by experiments 01–17.
+v2 — real enforcement. `public/privacy-sw.js` is a working service
+worker that, when privacy mode is on, intercepts every fetch from
+controlled clients and returns a synthetic 403 for any cross-origin URL
+(same-origin / data: / blob: always pass). It reports each block to the
+page over `postMessage` for the live audit log. The page registers the
+SW, toggles privacy via `SET_PRIVACY` messages, and the "probe" button
+fires a real cross-origin fetch so you can watch it get blocked (privacy
+on) or hit the network (privacy off). A `PerformanceObserver` tracks all
+resource loads and the cross-origin outbound-byte counter; CSP
+violations are also surfaced. Attestation JSON exports the full session.
+
+Remaining: strict-CSP response headers as defence-in-depth; pre-cache
+model weights in the SW install step.

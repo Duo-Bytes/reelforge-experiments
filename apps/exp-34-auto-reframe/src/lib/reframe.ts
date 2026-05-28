@@ -1,7 +1,7 @@
-// Placeholder saliency + smoothing for exp-34.
-//
-// v1: brightness-weighted center-of-mass on the downsampled frame.
-// v2: replace `saliencyHeuristic` with MobileSAM-distilled ONNX inference.
+// Focus smoothing + a brightness-weighted center-of-mass fallback for
+// exp-34. The real subject signal comes from the YOLOS-tiny detector in
+// workers/detect.worker.ts; `saliencyHeuristic` only drives the preview
+// before the model finishes loading or when no subject is detected.
 
 export type FocusSample = {
   t: number;

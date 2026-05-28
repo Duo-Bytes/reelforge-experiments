@@ -3,29 +3,77 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EXAMPLE_PLUGIN,
-  compilePlugin,
-  paintPreview,
   validatePlugin,
   type Plugin,
   type ParamValue,
 } from "../lib/plugin";
 
+type CompileMessage = { type: string; message: string; line: number };
+
 export default function Page() {
   const previewRef = useRef<HTMLCanvasElement | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const initRef = useRef(false);
+  const pluginRef = useRef<Plugin>(EXAMPLE_PLUGIN);
+  const [ready, setReady] = useState(false);
   const [plugin, setPlugin] = useState<Plugin>(EXAMPLE_PLUGIN);
   const [params, setParams] = useState<Record<string, ParamValue>>(() =>
     Object.fromEntries(EXAMPLE_PLUGIN.params.map((p) => [p.id, p.default])),
   );
   const [error, setError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<CompileMessage[]>([]);
   const [compileMs, setCompileMs] = useState(0);
   const [reloadCount, setReloadCount] = useState(0);
 
-  const recompile = useCallback(async (next: Plugin) => {
+  // Sandbox worker owns the WebGPU device + OffscreenCanvas preview.
+  useEffect(() => {
+    if (initRef.current) return;
+    initRef.current = true;
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const offscreen = canvas.transferControlToOffscreen();
+    const w = new Worker(
+      new URL("../workers/plugin.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    w.onmessage = (e: MessageEvent) => {
+      const m = e.data;
+      if (m.type === "READY") {
+        setReady(true);
+        // Compile the example plugin immediately.
+        w.postMessage({
+          type: "COMPILE",
+          code: pluginRef.current.shader,
+          params: pluginRef.current.params,
+        });
+      } else if (m.type === "COMPILED") {
+        setDiagnostics(m.messages ?? []);
+        setCompileMs(m.ms ?? 0);
+        if (m.ok) {
+          setError(null);
+          setReloadCount((n) => n + 1);
+        } else {
+          const errs = (m.messages as CompileMessage[]).filter((x) => x.type === "error");
+          setError(errs.map((x) => `L${x.line}: ${x.message}`).join("\n") || "compile failed");
+        }
+      } else if (m.type === "ERROR") {
+        setError(m.message);
+      }
+    };
+    w.postMessage({ type: "INIT", canvas: offscreen }, [offscreen]);
+    workerRef.current = w;
+    return () => {
+      w.terminate();
+      workerRef.current = null;
+      initRef.current = false;
+    };
+  }, []);
+
+  const recompile = useCallback((next: Plugin) => {
     setError(null);
-    const t0 = performance.now();
     try {
       validatePlugin(next);
-      await compilePlugin(next); // simulates WGSL compile + worker mount
+      pluginRef.current = next;
       setPlugin(next);
       setParams((prev) => {
         const fresh: Record<string, ParamValue> = {};
@@ -34,18 +82,24 @@ export default function Page() {
         }
         return fresh;
       });
-      setCompileMs(performance.now() - t0);
-      setReloadCount((n) => n + 1);
+      workerRef.current?.postMessage({
+        type: "COMPILE",
+        code: next.shader,
+        params: next.params,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
+  // Push param changes to the worker's uniform buffer (live, no recompile).
   useEffect(() => {
-    const canvas = previewRef.current;
-    if (!canvas) return;
-    paintPreview(canvas, plugin, params);
-  }, [plugin, params]);
+    workerRef.current?.postMessage({
+      type: "PARAMS",
+      values: params,
+      specs: plugin.params,
+    });
+  }, [params, plugin]);
 
   return (
     <main className="min-h-screen bg-zinc-50 p-8 font-mono text-zinc-900 dark:bg-black dark:text-zinc-100">
@@ -53,10 +107,11 @@ export default function Page() {
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Exp-38 · Plugin / Effect SDK</h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Plugin = WGSL shader + JSON Schema params + bindings module.{" "}
-            v1 simulates the compile + hot-reload pipeline with a 2D canvas
-            preview. v2 wires the real WGSL into a sandbox worker against the
-            exp-04 compositor.
+            Plugin = WGSL shader + JSON-Schema params. The shader is
+            compiled for real via <code>createShaderModule</code> in a
+            sandboxed WebGPU worker; compile errors come straight from{" "}
+            <code>getCompilationInfo()</code>. Edit the JSON and click out to
+            hot-reload; drag params to update the live preview.
           </p>
         </header>
 
@@ -66,9 +121,10 @@ export default function Page() {
           </div>
         )}
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <Stat label="plugin id" v={plugin.id} />
-          <Stat label="compile" v={`${compileMs.toFixed(1)} ms`} good={compileMs < 200} />
+          <Stat label="gpu" v={ready ? "ready" : "init…"} good={ready} />
+          <Stat label="compile" v={`${compileMs.toFixed(1)} ms`} good={compileMs > 0 && compileMs < 200} />
           <Stat label="reloads" v={String(reloadCount)} />
         </section>
 
@@ -108,31 +164,34 @@ export default function Page() {
         </section>
 
         <section className="rounded border border-zinc-300 p-4 dark:border-zinc-700">
-          <h2 className="mb-2 text-sm font-semibold">preview</h2>
+          <h2 className="mb-2 text-sm font-semibold">preview (live WebGPU)</h2>
           <canvas
             ref={previewRef}
             width={1024}
             height={256}
             className="block w-full rounded bg-zinc-100 dark:bg-zinc-900"
           />
+          {diagnostics.length > 0 && (
+            <div className="mt-2 max-h-32 overflow-auto rounded bg-zinc-100 p-2 text-[11px] dark:bg-zinc-900">
+              {diagnostics.map((d, i) => (
+                <div
+                  key={i}
+                  className={d.type === "error" ? "text-red-500" : "text-amber-500"}
+                >
+                  [{d.type}] L{d.line}: {d.message}
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="rounded border border-zinc-300 p-4 text-xs dark:border-zinc-700">
-          <h2 className="mb-2 text-sm font-semibold">Next steps</h2>
+          <h2 className="mb-2 text-sm font-semibold">How it works / next steps</h2>
           <ul className="ml-5 list-disc space-y-1 text-zinc-600 dark:text-zinc-400">
-            <li>
-              Real WGSL compile via <code>GPUDevice.createShaderModule</code>{" "}
-              with a 1-second compile-timeout watchdog.
-            </li>
-            <li>
-              Sandbox the plugin module in a dedicated Worker; deny <code>fetch</code>{" "}
-              + storage via the service worker on the worker scope.
-            </li>
-            <li>
-              Hot-reload from a local directory via <code>FileSystemObserver</code>{" "}
-              (Chrome 129+ origin trial); fall back to polling on older Chrome.
-            </li>
-            <li>Wire param updates into exp-23 cubic-bezier keyframes.</li>
+            <li>Plugin WGSL is compiled in a dedicated worker via <code>createShaderModule</code>; <code>getCompilationInfo()</code> + a validation error scope surface real diagnostics without crashing the UI.</li>
+            <li>Params pack into a std140 uniform buffer and update the live preview with no recompile.</li>
+            <li>Deny <code>fetch</code> + storage on the worker scope via the exp-37 service worker for true isolation.</li>
+            <li>Hot-reload from a local directory via <code>FileSystemObserver</code>; fall back to polling on older Chrome.</li>
             <li>Kill-switch: if a dispatch exceeds budget, call <code>device.destroy()</code> on the plugin worker.</li>
           </ul>
         </section>

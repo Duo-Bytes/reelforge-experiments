@@ -39,8 +39,7 @@ export function isVoiced(hops: VadHops): boolean {
   return voicedHops >= hops.length * VOICED_FRACTION;
 }
 
-/** Returns indices (in seconds) where the signal is voiced. Used to
- * place mock words on the timing axis. */
+/** Returns voiced spans (in seconds) over the hop grid. */
 export function voicedRegions(hops: VadHops): { startSec: number; endSec: number }[] {
   const regions: { startSec: number; endSec: number }[] = [];
   const thresholdLin = 10 ** (THRESHOLD_DBFS / 20);

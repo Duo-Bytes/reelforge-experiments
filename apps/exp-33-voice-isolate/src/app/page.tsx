@@ -1,36 +1,112 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { decodeMix, runEnergyAB, type SpectrumRow } from "../lib/isolate";
+import {
+  analyzeAB,
+  decodeTo48kMono,
+  encodeWav,
+  type SpectrumRow,
+} from "../lib/isolate";
 
 export default function Page() {
   const dryRef = useRef<HTMLCanvasElement | null>(null);
   const wetRef = useRef<HTMLCanvasElement | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const reqIdRef = useRef(0);
+
   const [fileName, setFileName] = useState("");
   const [duration, setDuration] = useState(0);
-  const [snrDb, setSnrDb] = useState<number | null>(null);
+  const [reductionDb, setReductionDb] = useState<number | null>(null);
+  const [avgVad, setAvgVad] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [outboundBytes] = useState(0);
+  const [dryUrl, setDryUrl] = useState<string | null>(null);
+  const [wetUrl, setWetUrl] = useState<string | null>(null);
 
-  const handleFile = useCallback(async (file: File) => {
-    setError(null);
-    setSnrDb(null);
-    setFileName(file.name);
-    setBusy(true);
-    try {
-      const decoded = await decodeMix(file);
-      setDuration(decoded.durationSec);
-      const { drySpec, wetSpec, snrImprovement } = runEnergyAB(decoded.samples, decoded.sampleRate);
-      paintSpectrogram(dryRef.current, drySpec);
-      paintSpectrogram(wetRef.current, wetSpec);
-      setSnrDb(snrImprovement);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+  useEffect(() => {
+    const w = new Worker(
+      new URL("../workers/denoise.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    workerRef.current = w;
+    return () => {
+      w.terminate();
+      workerRef.current = null;
+    };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (dryUrl) URL.revokeObjectURL(dryUrl);
+      if (wetUrl) URL.revokeObjectURL(wetUrl);
+    };
+  }, [dryUrl, wetUrl]);
+
+  const denoise = useCallback((pcm48k: Float32Array): Promise<{ denoised: Float32Array; avgVad: number }> => {
+    return new Promise((resolve, reject) => {
+      const worker = workerRef.current;
+      if (!worker) {
+        reject(new Error("worker not ready"));
+        return;
+      }
+      const id = ++reqIdRef.current;
+      const onMessage = (e: MessageEvent) => {
+        const m = e.data;
+        if (m.id !== id) return;
+        if (m.type === "PROGRESS") {
+          setPct(m.total ? Math.round((100 * m.done) / m.total) : 0);
+        } else if (m.type === "ERROR") {
+          worker.removeEventListener("message", onMessage);
+          reject(new Error(m.message));
+        } else if (m.type === "RESULT") {
+          worker.removeEventListener("message", onMessage);
+          resolve({ denoised: m.denoised, avgVad: m.avgVad });
+        }
+      };
+      worker.addEventListener("message", onMessage);
+      const copy = new Float32Array(pcm48k);
+      worker.postMessage({ type: "RUN", id, pcm48k: copy }, [copy.buffer]);
+    });
+  }, []);
+
+  const handleFile = useCallback(
+    async (file: File) => {
+      setError(null);
+      setReductionDb(null);
+      setAvgVad(null);
+      setFileName(file.name);
+      setBusy(true);
+      setPct(0);
+      try {
+        const decoded = await decodeTo48kMono(file);
+        setDuration(decoded.durationSec);
+        const dry = decoded.samples;
+        const { denoised, avgVad: vad } = await denoise(dry);
+
+        const { drySpec, wetSpec, reductionDb: dB } = analyzeAB(dry, denoised);
+        paintSpectrogram(dryRef.current, drySpec);
+        paintSpectrogram(wetRef.current, wetSpec);
+        setReductionDb(dB);
+        setAvgVad(vad);
+
+        setDryUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(encodeWav(dry, decoded.sampleRate));
+        });
+        setWetUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(encodeWav(denoised, decoded.sampleRate));
+        });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [denoise],
+  );
 
   useEffect(() => {
     const drop = (e: DragEvent) => {
@@ -53,10 +129,9 @@ export default function Page() {
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Exp-33 · On-Device Voice Isolation / Denoise</h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            v1 demonstrates the STFT spectrogram + A/B pipeline with a placeholder
-            spectral-subtraction denoiser. v2 swaps in DeepFilterNet3 ONNX (WebGPU
-            EP) — same surface, much higher quality.{" "}
-            <strong>Never uploads audio.</strong>
+            Real RNNoise speech denoiser (WASM) running fully on-device —
+            decode → 48 kHz mono → frame-by-frame RNN denoise → A/B
+            spectrogram + playback. <strong>Never uploads audio.</strong>
           </p>
         </header>
 
@@ -66,13 +141,17 @@ export default function Page() {
           </div>
         )}
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <Stat label="file" v={fileName || "—"} />
           <Stat label="duration" v={duration ? `${duration.toFixed(1)} s` : "—"} />
           <Stat
-            label="SNR improvement"
-            v={snrDb !== null ? `${snrDb.toFixed(1)} dB` : "—"}
-            good={snrDb !== null && snrDb > 6}
+            label="level reduction"
+            v={reductionDb !== null ? `${reductionDb.toFixed(1)} dB` : "—"}
+            good={reductionDb !== null && reductionDb > 1}
+          />
+          <Stat
+            label="avg speech prob"
+            v={avgVad !== null ? avgVad.toFixed(2) : "—"}
           />
         </section>
 
@@ -91,7 +170,7 @@ export default function Page() {
               />
             </label>
             <span className="text-zinc-500">
-              or drop a file anywhere on this page · {busy ? "processing…" : "idle"}
+              or drop a file anywhere on this page · {busy ? `denoising… ${pct}%` : "idle"}
             </span>
             <div className="ml-auto text-zinc-500">
               outbound bytes:{" "}
@@ -102,8 +181,8 @@ export default function Page() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <SpecPanel title="dry" canvasRef={dryRef} />
-            <SpecPanel title="wet" canvasRef={wetRef} />
+            <SpecPanel title="dry" canvasRef={dryRef} audioUrl={dryUrl} />
+            <SpecPanel title="wet (denoised)" canvasRef={wetRef} audioUrl={wetUrl} downloadName="denoised.wav" />
           </div>
         </section>
 
@@ -111,17 +190,13 @@ export default function Page() {
           <h2 className="mb-2 text-sm font-semibold">Next steps</h2>
           <ul className="ml-5 list-disc space-y-1 text-zinc-600 dark:text-zinc-400">
             <li>
-              Replace the placeholder denoise pass with DeepFilterNet3 ONNX
-              (~25 MB) via <code>onnxruntime-web</code> WebGPU EP.
+              Upgrade RNNoise → DeepFilterNet3 ONNX (WebGPU EP) for higher
+              quality; needs an ERB / complex-spectrogram feature pipeline.
             </li>
-            <li>Move the STFT into a WGSL compute pass instead of JS FFT.</li>
+            <li>Move the STFT viz into a WGSL compute pass instead of JS DFT.</li>
             <li>
-              Realtime path: <code>AudioWorkletNode</code> ring-buffer to a worker
-              that drains into the model.
-            </li>
-            <li>
-              Render-to-OPFS path via <code>OfflineAudioContext</code>; emit a WAV
-              the exp-10 export pipeline can mux.
+              Realtime path: <code>AudioWorkletNode</code> ring-buffer feeding
+              the RNNoise frame loop live.
             </li>
             <li>Compensate <code>AudioContext.outputLatency</code> in exp-08 A/V sync.</li>
           </ul>
@@ -134,14 +209,26 @@ export default function Page() {
 function SpecPanel({
   title,
   canvasRef,
+  audioUrl,
+  downloadName,
 }: {
   title: string;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  audioUrl?: string | null;
+  downloadName?: string;
 }) {
   return (
     <div className="rounded bg-zinc-100 p-2 dark:bg-zinc-900">
-      <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">{title}</div>
+      <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-zinc-500">
+        <span>{title}</span>
+        {audioUrl && downloadName && (
+          <a href={audioUrl} download={downloadName} className="text-emerald-500">
+            download
+          </a>
+        )}
+      </div>
       <canvas ref={canvasRef} width={512} height={180} className="block w-full" />
+      {audioUrl && <audio src={audioUrl} controls className="mt-2 w-full" />}
     </div>
   );
 }

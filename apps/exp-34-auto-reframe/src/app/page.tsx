@@ -13,20 +13,71 @@ const ASPECTS: Aspect[] = [
 export default function Page() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const sourceRef = useRef<HTMLCanvasElement | null>(null);
+  const detectRef = useRef<HTMLCanvasElement | null>(null);
   const outRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const pathRef = useRef<FocusSample[]>([]);
+  const workerRef = useRef<Worker | null>(null);
+  const modelReadyRef = useRef(false);
+  const inFlightRef = useRef(false);
+  const lastDetectRef = useRef(0);
+  const detIdRef = useRef(0);
   const [aspect, setAspect] = useState<Aspect>(ASPECTS[0]);
   const [fileName, setFileName] = useState("");
   const [fps, setFps] = useState(0);
-  const [analyzed, setAnalyzed] = useState(0);
+  const [modelPct, setModelPct] = useState(0);
+  const [modelReady, setModelReady] = useState(false);
+  const [focusLabel, setFocusLabel] = useState<string>("—");
   const [error, setError] = useState<string | null>(null);
+
+  // Detector worker — loads YOLOS-tiny, returns normalised subject boxes.
+  useEffect(() => {
+    const w = new Worker(
+      new URL("../workers/detect.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    w.onmessage = (e: MessageEvent) => {
+      const m = e.data;
+      if (m.type === "LOAD") {
+        setModelPct(m.done);
+      } else if (m.type === "READY") {
+        modelReadyRef.current = true;
+        setModelReady(true);
+        setModelPct(100);
+      } else if (m.type === "FOCUS") {
+        const v = videoRef.current;
+        if (v) {
+          const sw = v.videoWidth;
+          const sh = v.videoHeight;
+          pathRef.current.push({
+            t: v.currentTime,
+            x: m.cx * sw,
+            y: m.cy * sh,
+            w: m.w * sw,
+            h: m.h * sh,
+          });
+          if (pathRef.current.length > 600) pathRef.current.shift();
+          setFocusLabel(`${m.label} ${(m.score * 100).toFixed(0)}%`);
+        }
+        inFlightRef.current = false;
+      } else if (m.type === "NOFOCUS" || m.type === "BUSY") {
+        inFlightRef.current = false;
+      } else if (m.type === "ERROR") {
+        setError(`detector: ${m.message}`);
+        inFlightRef.current = false;
+      }
+    };
+    workerRef.current = w;
+    return () => {
+      w.terminate();
+      workerRef.current = null;
+    };
+  }, []);
 
   const handleFile = useCallback((file: File) => {
     setError(null);
     setFileName(file.name);
     pathRef.current = [];
-    setAnalyzed(0);
     const v = videoRef.current;
     if (!v) return;
     v.src = URL.createObjectURL(file);
@@ -50,23 +101,50 @@ export default function Page() {
       const sh = v.videoHeight;
       if (src.width !== sw) { src.width = sw; src.height = sh; }
 
-      const sctx = src.getContext("2d");
+      const sctx = src.getContext("2d", { willReadFrequently: true });
       if (!sctx) return;
       sctx.drawImage(v, 0, 0, sw, sh);
 
-      // Every 3rd frame, run the placeholder saliency heuristic.
-      if (frames % 3 === 0) {
+      const now = performance.now();
+
+      if (modelReadyRef.current) {
+        // Sample a downscaled frame for the detector ~every 150 ms; drop
+        // samples while one inference is still in flight.
+        if (now - lastDetectRef.current > 150 && !inFlightRef.current) {
+          lastDetectRef.current = now;
+          const dc = detectRef.current;
+          if (dc) {
+            const dw = 256;
+            const dh = Math.max(1, Math.round((256 * sh) / sw));
+            if (dc.width !== dw) { dc.width = dw; dc.height = dh; }
+            const dctx = dc.getContext("2d", { willReadFrequently: true });
+            if (dctx) {
+              dctx.drawImage(v, 0, 0, dw, dh);
+              const img = dctx.getImageData(0, 0, dw, dh);
+              const copy = new Uint8ClampedArray(img.data);
+              inFlightRef.current = true;
+              workerRef.current?.postMessage(
+                { type: "DETECT", id: ++detIdRef.current, width: dw, height: dh, data: copy },
+                [copy.buffer],
+              );
+            }
+          }
+        }
+      } else if (frames % 3 === 0) {
+        // Pre-model fallback: brightness center-of-mass.
         const focus = saliencyHeuristic(sctx, sw, sh);
         pathRef.current.push({ t: v.currentTime, x: focus.x, y: focus.y, w: focus.w, h: focus.h });
         if (pathRef.current.length > 600) pathRef.current.shift();
-        setAnalyzed((n) => n + 1);
       }
 
       // Smoothed path → current focus rect.
       const smoothed = smoothFocusPath(pathRef.current, v.currentTime);
       const targetAspect = aspect.w / aspect.h;
-      const cropW = Math.min(sw, smoothed.w * 1.2);
-      const cropH = cropW / targetAspect;
+      let cropW = Math.min(sw, smoothed.w * 1.2);
+      let cropH = cropW / targetAspect;
+      // Keep the crop inside the source on the tall axis too.
+      if (cropH > sh) { cropH = sh; cropW = cropH * targetAspect; }
+      if (cropW > sw) { cropW = sw; cropH = cropW / targetAspect; }
       let cropX = smoothed.x - cropW / 2;
       let cropY = smoothed.y - cropH / 2;
       cropX = Math.max(0, Math.min(sw - cropW, cropX));
@@ -88,7 +166,6 @@ export default function Page() {
       }
 
       frames++;
-      const now = performance.now();
       if (now - last >= 1000) {
         setFps(frames);
         frames = 0;
@@ -121,10 +198,11 @@ export default function Page() {
         <header className="space-y-2">
           <h1 className="text-3xl font-bold">Exp-34 · Saliency-Driven Auto-Reframe</h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            v1 uses a brightness-weighted center-of-mass saliency heuristic so the
-            pipeline runs end-to-end without a model. v2 swaps in MobileSAM-distilled
-            ONNX (WebGPU EP) running on a 480p downsample.{" "}
-            <strong>Never uploads media.</strong>
+            Real on-device subject tracking: YOLOS-tiny object detection
+            (Transformers.js, WebGPU EP) samples a 256 px downscale every
+            ~150 ms; the focus path is Catmull-Rom-smoothed and cropped to the
+            target aspect. A brightness heuristic drives the preview until the
+            model loads. <strong>Never uploads media.</strong>
           </p>
         </header>
 
@@ -134,10 +212,15 @@ export default function Page() {
           </div>
         )}
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <section className="grid grid-cols-2 gap-4 md:grid-cols-5">
           <Stat label="file" v={fileName || "—"} />
           <Stat label="preview fps" v={String(fps)} good={fps >= 30} />
-          <Stat label="samples taken" v={String(analyzed)} />
+          <Stat
+            label="detector"
+            v={modelReady ? "ready" : `loading ${modelPct}%`}
+            good={modelReady}
+          />
+          <Stat label="subject" v={focusLabel} />
           <Stat label="target" v={aspect.id} />
         </section>
 
@@ -179,6 +262,7 @@ export default function Page() {
               <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">source</div>
               <video ref={videoRef} className="block w-full" muted loop playsInline controls />
               <canvas ref={sourceRef} className="hidden" />
+              <canvas ref={detectRef} className="hidden" />
             </div>
             <div className="rounded bg-zinc-100 p-2 dark:bg-zinc-900">
               <div className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">
@@ -192,11 +276,10 @@ export default function Page() {
         <section className="rounded border border-zinc-300 p-4 text-xs dark:border-zinc-700">
           <h2 className="mb-2 text-sm font-semibold">Next steps</h2>
           <ul className="ml-5 list-disc space-y-1 text-zinc-600 dark:text-zinc-400">
-            <li>Replace brightness-COM heuristic with a saliency or face-detection ONNX model.</li>
-            <li>Run inference in a Worker on a 480p downsample via <code>OffscreenCanvas.transferToImageBitmap</code>.</li>
-            <li>Apply crop in the exp-04 WGSL compositor with bicubic resample.</li>
-            <li>Wire jerk-limit + Catmull-Rom smoothing on the focus path.</li>
+            <li>Apply the crop in the exp-04 WGSL compositor with bicubic resample.</li>
+            <li>Add a jerk-limit on the focus path on top of the current smoothing.</li>
             <li>Manual override: drag the crop overlay to lock the auto-track.</li>
+            <li>Swap YOLOS-tiny for a distilled face/saliency model to cut latency further.</li>
           </ul>
         </section>
       </div>

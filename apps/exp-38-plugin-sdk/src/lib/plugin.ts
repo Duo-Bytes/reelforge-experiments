@@ -1,7 +1,9 @@
-// Plugin spec + a minimal compile/preview simulation for exp-38.
-// The real implementation will compile WGSL via GPUDevice.createShaderModule
-// inside a sandboxed Worker. For now we render the plugin's effect via a 2D
-// preview so the param/hot-reload UX can be exercised end-to-end.
+// Plugin spec + helpers for exp-38.
+//
+// Plugins are compiled for real via GPUDevice.createShaderModule inside a
+// sandboxed Worker (see workers/plugin.worker.ts) and previewed with a
+// live WebGPU render pass. This module holds the shared types, the
+// example plugin, validation, and the std140 uniform packer.
 
 export type ParamSpec =
   | {
@@ -63,68 +65,46 @@ export function validatePlugin(p: Plugin): void {
     throw new Error("plugin.params must be an array");
   }
   for (const param of p.params) {
-    if (!param.id || typeof param.id !== "string") {
+    // p is cast from untrusted JSON, so validate the shape at runtime.
+    const { id, type } = param as { id?: unknown; type?: unknown };
+    if (!id || typeof id !== "string") {
       throw new Error("param.id missing");
     }
-    if (param.type !== "f32" && param.type !== "vec3") {
-      throw new Error(`unsupported param type ${param.type}`);
+    if (type !== "f32" && type !== "vec3") {
+      throw new Error(`unsupported param type ${String(type)}`);
     }
   }
 }
 
-// Simulate a compile step. v2: compile real WGSL, mount worker, return a
-// ready handle. We sleep just enough for the UI to read realistic timing.
-export async function compilePlugin(_p: Plugin): Promise<void> {
-  await new Promise((r) => setTimeout(r, 40));
-}
-
-// 2D preview that responds to params so the hot-reload UX is visible.
-export function paintPreview(
-  canvas: HTMLCanvasElement,
-  plugin: Plugin,
+/**
+ * Pack params into a std140 uniform buffer matching a WGSL `struct` whose
+ * members are declared in `specs` order. f32 aligns to 4 bytes; vec3
+ * aligns to 16 and occupies 12. The total is rounded up to 16. This
+ * matches the layout WGSL uses for a `var<uniform>` struct, so the
+ * example plugin's `Params { radius, intensity, tint }` lands correctly.
+ */
+export function packParams(
+  specs: ParamSpec[],
   values: Record<string, ParamValue>,
-) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const w = canvas.width;
-  const h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
-
-  // base image: gradient + circle to make the glow effect visible
-  const grad = ctx.createLinearGradient(0, 0, w, h);
-  grad.addColorStop(0, "#1f2937");
-  grad.addColorStop(1, "#0f172a");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, w, h);
-
-  const radius = numParam(values, "radius", 16);
-  const intensity = numParam(values, "intensity", 1);
-  const tint = vec3Param(values, "tint", [1, 1, 1]);
-
-  // tinted glow circles
-  ctx.globalCompositeOperation = "lighter";
-  for (let i = 0; i < 6; i++) {
-    const r = radius * (1 + i * 0.5);
-    const a = Math.min(1, intensity / (i + 1));
-    ctx.fillStyle = `rgba(${Math.round(tint[0] * 255)},${Math.round(tint[1] * 255)},${Math.round(tint[2] * 255)},${a * 0.18})`;
-    ctx.beginPath();
-    ctx.arc(w / 2, h / 2, r * 2, 0, Math.PI * 2);
-    ctx.fill();
+): Float32Array {
+  let cursor = 0; // in floats (4 bytes each)
+  const writes: { index: number; data: number[] }[] = [];
+  for (const spec of specs) {
+    const v = values[spec.id] ?? spec.default;
+    if (spec.type === "f32") {
+      writes.push({ index: cursor, data: [typeof v === "number" ? v : 0] });
+      cursor += 1;
+    } else {
+      // vec3 aligns to 16 bytes = 4 floats.
+      cursor = Math.ceil(cursor / 4) * 4;
+      const arr = Array.isArray(v) ? v : [0, 0, 0];
+      writes.push({ index: cursor, data: [arr[0] ?? 0, arr[1] ?? 0, arr[2] ?? 0] });
+      cursor += 3;
+    }
   }
-  ctx.globalCompositeOperation = "source-over";
-
-  // plugin id label
-  ctx.fillStyle = "rgba(255,255,255,0.5)";
-  ctx.font = "11px ui-monospace, monospace";
-  ctx.fillText(`${plugin.name} · ${plugin.version}`, 10, h - 12);
-}
-
-function numParam(v: Record<string, ParamValue>, key: string, fallback: number): number {
-  const raw = v[key];
-  return typeof raw === "number" ? raw : fallback;
-}
-
-function vec3Param(v: Record<string, ParamValue>, key: string, fallback: number[]): number[] {
-  const raw = v[key];
-  return Array.isArray(raw) && raw.length === 3 ? raw : fallback;
+  // Round the struct size up to a multiple of 16 bytes (4 floats).
+  const sizeFloats = Math.max(4, Math.ceil(cursor / 4) * 4);
+  const buf = new Float32Array(sizeFloats);
+  for (const w of writes) buf.set(w.data, w.index);
+  return buf;
 }
