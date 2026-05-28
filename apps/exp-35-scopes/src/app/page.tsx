@@ -166,12 +166,12 @@ export default function Page() {
         </section>
 
         <section className="rounded border border-zinc-300 p-4 text-xs dark:border-zinc-700">
-          <h2 className="mb-2 text-sm font-semibold">Next steps</h2>
+          <h2 className="mb-2 text-sm font-semibold">How it works / next steps</h2>
           <ul className="ml-5 list-disc space-y-1 text-zinc-600 dark:text-zinc-400">
-            <li>Replace JS bin accumulation with a WGSL compute pass using <code>atomic&lt;u32&gt;</code> bins.</li>
-            <li>Per-workgroup shared bins → atomic merge to reduce global contention.</li>
-            <li>Mount on exp-04 compositor output texture; verify color-space-aware vectorscope per exp-13.</li>
-            <li>Render to a <code>bitmaprenderer</code> canvas context for zero-copy mirror to side displays.</li>
+            <li>A single WGSL compute pass accumulates all four scopes into <code>atomic&lt;u32&gt;</code> storage bins, read back each frame.</li>
+            <li>Optimisation: per-workgroup shared bins → atomic merge to cut global contention.</li>
+            <li>Mount on the exp-04 compositor output texture (swap the <code>writeTexture</code> upload) for zero-copy; verify color-space-aware vectorscope per exp-13.</li>
+            <li>Render to a <code>bitmaprenderer</code> canvas context to mirror to side displays.</li>
           </ul>
         </section>
       </div>

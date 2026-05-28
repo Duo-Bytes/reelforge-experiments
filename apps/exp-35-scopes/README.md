@@ -16,7 +16,12 @@ pnpm --filter exp-35-scopes dev
 
 ## Status
 
-v1 scaffold — the pipeline is wired end-to-end with placeholder
-implementations of the most expensive component (model inference / WGSL
-compute pass / etc.). v2 swaps in the production implementation against
-the substrate proven by experiments 01–17.
+v2 — real WGSL compute. `src/lib/scopes.ts` uploads the source frame to
+a GPUTexture and runs a single compute pass that accumulates luma
+waveform, RGB parade, vectorscope, and histogram into `atomic<u32>`
+storage bins, read back each frame into `ScopeReadback`. To go fully
+zero-copy, swap the `writeTexture` upload for the exp-04 compositor's
+output texture.
+
+Remaining: per-workgroup shared bins → atomic merge to reduce global
+contention; color-space-aware vectorscope per exp-13.

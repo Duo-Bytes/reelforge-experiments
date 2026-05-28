@@ -16,7 +16,15 @@ pnpm --filter exp-38-plugin-sdk dev
 
 ## Status
 
-v1 scaffold — the pipeline is wired end-to-end with placeholder
-implementations of the most expensive component (model inference / WGSL
-compute pass / etc.). v2 swaps in the production implementation against
-the substrate proven by experiments 01–17.
+v2 — real WGSL compilation in a sandbox worker. `src/workers/plugin.worker.ts`
+owns a WebGPU device + transferred OffscreenCanvas, compiles plugin WGSL
+via `createShaderModule`, and surfaces real `getCompilationInfo()`
+diagnostics plus validation-scope errors without crashing the UI. The
+fragment is linked with a host full-screen-triangle vertex stage and
+rendered over a generated base texture; params pack into a std140
+uniform buffer (`packParams`) and update the live preview with no
+recompile. Edit the JSON and click out to hot-reload.
+
+Remaining: deny `fetch`/storage on the worker scope via the exp-37
+service worker; `FileSystemObserver` hot-reload from a local directory;
+budget kill-switch via `device.destroy()`.

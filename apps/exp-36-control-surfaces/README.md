@@ -16,7 +16,14 @@ pnpm --filter exp-36-control-surfaces dev
 
 ## Status
 
-v1 scaffold — the pipeline is wired end-to-end with placeholder
-implementations of the most expensive component (model inference / WGSL
-compute pass / etc.). v2 swaps in the production implementation against
-the substrate proven by experiments 01–17.
+v2 — real hardware I/O. `src/lib/controls.ts` binds WebMIDI
+(`navigator.requestMIDIAccess`) input ports and WebHID
+(`navigator.hid.requestDevice`) input reports, forwarding raw payloads to
+the UI. Includes working decoders for the Behringer X-Touch Mini (CC,
+both relative and MC modes) and the Contour ShuttlePro v2 (jog / shuttle
+/ button bitmap). New devices slot in as thin per-device parser
+functions.
+
+Remaining: persist device IDs in IndexedDB and re-bind via
+`navigator.hid.getDevices()` on reload; map controls onto the exp-04
+lift/gamma/gain + exp-09 transport.
