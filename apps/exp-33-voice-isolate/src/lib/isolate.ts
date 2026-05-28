@@ -1,8 +1,12 @@
-// Audio decode + STFT spectrogram + A/B metrics for exp-33.
+// STFT spectrogram + A/B metrics for exp-33.
 //
 // The actual denoise runs in workers/denoise.worker.ts (RNNoise WASM).
-// This module only handles decode/resample to the model's 48 kHz mono
-// input and the dry/wet visualisation + level-reduction metric.
+// Decode/resample/WAV live in @reelforge/audio; this module handles the
+// dry/wet visualisation + level-reduction metric.
+
+import { decodeToMono } from "@reelforge/audio";
+
+export { encodeWav } from "@reelforge/audio";
 
 const FFT_SIZE = 512;
 const HOP = 256;
@@ -11,38 +15,12 @@ const TARGET_RATE = 48000; // RNNoise operates at 48 kHz.
 export type SpectrumRow = { mag: Float32Array };
 
 /** Decode any container to 48 kHz mono Float32 — the RNNoise input rate. */
-export async function decodeTo48kMono(file: File): Promise<{
+export function decodeTo48kMono(file: File): Promise<{
   samples: Float32Array;
   sampleRate: number;
   durationSec: number;
 }> {
-  const buf = await file.arrayBuffer();
-  const tmp = new AudioContext();
-  const decoded = await tmp.decodeAudioData(buf.slice(0));
-  await tmp.close();
-
-  const offline = new OfflineAudioContext(
-    1,
-    Math.max(1, Math.ceil(decoded.duration * TARGET_RATE)),
-    TARGET_RATE,
-  );
-  const src = offline.createBufferSource();
-  src.buffer = decoded;
-  if (decoded.numberOfChannels === 1) {
-    src.connect(offline.destination);
-  } else {
-    const merger = offline.createGain();
-    merger.gain.value = 1 / decoded.numberOfChannels;
-    src.connect(merger);
-    merger.connect(offline.destination);
-  }
-  src.start();
-  const rendered = await offline.startRendering();
-  return {
-    samples: rendered.getChannelData(0),
-    sampleRate: TARGET_RATE,
-    durationSec: decoded.duration,
-  };
+  return decodeToMono(file, TARGET_RATE);
 }
 
 export function analyzeAB(
@@ -106,34 +84,4 @@ function hann(n: number): Float32Array {
   const w = new Float32Array(n);
   for (let i = 0; i < n; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
   return w;
-}
-
-/** Encode mono Float32 PCM to a 16-bit WAV blob for playback / download. */
-export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
-  const dataSize = samples.length * 2;
-  const ab = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(ab);
-  const wstr = (off: number, s: string) => {
-    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
-  };
-  wstr(0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  wstr(8, "WAVE");
-  wstr(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  wstr(36, "data");
-  view.setUint32(40, dataSize, true);
-  let off = 44;
-  for (let i = 0; i < samples.length; i++) {
-    const v = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(off, v < 0 ? v * 0x8000 : v * 0x7fff, true);
-    off += 2;
-  }
-  return new Blob([ab], { type: "audio/wav" });
 }

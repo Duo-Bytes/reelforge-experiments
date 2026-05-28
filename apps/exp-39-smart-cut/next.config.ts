@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["@reelforge/audio", "@reelforge/asr"],
   async headers() {
     return [
       {

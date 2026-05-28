@@ -1,4 +1,4 @@
-// Audio decode + on-device silence detection for exp-32.
+// On-device silence detection for exp-32.
 //
 // Two paths:
 //   * detectSilenceEnergy — fast RMS-threshold fallback. Used when the VAD
@@ -7,7 +7,9 @@
 //     into silence segments via hysteresis + min-duration filtering. The
 //     probabilities themselves are produced by the VAD worker.
 //
-// The decode/resample stage is shared.
+// Decode/resample lives in @reelforge/audio.
+
+import { decodeToMono } from "@reelforge/audio";
 
 export type SilenceSegment = { startSec: number; endSec: number };
 
@@ -30,36 +32,7 @@ export async function decodeToMono16k(file: File): Promise<{
   sampleRate: number;
   durationSec: number;
 }> {
-  const buf = await file.arrayBuffer();
-  // OfflineAudioContext supports any rate; ask for the target directly so the
-  // resample happens inside the audio engine, not in JS.
-  const tmpCtx = new AudioContext();
-  const decoded = await tmpCtx.decodeAudioData(buf.slice(0));
-  await tmpCtx.close();
-
-  const offline = new OfflineAudioContext(
-    1,
-    Math.ceil((decoded.duration * TARGET_RATE)),
-    TARGET_RATE,
-  );
-  const src = offline.createBufferSource();
-  src.buffer = decoded;
-  // Average channels into one mono input.
-  if (decoded.numberOfChannels === 1) {
-    src.connect(offline.destination);
-  } else {
-    const merger = offline.createGain();
-    merger.gain.value = 1 / decoded.numberOfChannels;
-    src.connect(merger);
-    merger.connect(offline.destination);
-  }
-  src.start();
-  const rendered = await offline.startRendering();
-  return {
-    samples: rendered.getChannelData(0),
-    sampleRate: TARGET_RATE,
-    durationSec: decoded.duration,
-  };
+  return decodeToMono(file, TARGET_RATE);
 }
 
 /** Energy-RMS silence detection. Cheap fallback when VAD isn't loaded. */

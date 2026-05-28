@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import * as ort from "onnxruntime-web/webgpu";
+import { ort, loadOnnxFromUrl } from "@reelforge/onnx";
 
 type LoadMsg = { type: "LOAD"; url: string };
 type RunMsg = {
@@ -13,12 +13,6 @@ type InMsg = LoadMsg | RunMsg;
 
 let session: ort.InferenceSession | null = null;
 let provider: "webgpu" | "wasm" | null = null;
-const MODEL_CACHE = "reelforge-models-v1";
-
-// onnxruntime-web ships its own WASM/WebGPU shims; pin to the package's
-// own version so the JS and binary halves never disagree across CDN updates.
-ort.env.wasm.wasmPaths =
-  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.25.1/dist/";
 
 self.onmessage = async (e: MessageEvent<InMsg>) => {
   try {
@@ -37,43 +31,20 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
 
 async function load(url: string): Promise<void> {
   self.postMessage({ type: "STATUS", message: "fetching model…" });
-  const cache = await caches.open(MODEL_CACHE);
-  let response = await cache.match(url);
-  if (response) {
-    self.postMessage({ type: "STATUS", message: "model from Cache API" });
-  } else {
-    const fetched = await fetch(url, { mode: "cors" });
-    if (!fetched.ok) throw new Error(`fetch ${url} → ${fetched.status}`);
-    await cache.put(url, fetched.clone());
-    response = fetched;
-  }
-  const bytes = await response.arrayBuffer();
-
-  try {
-    session = await ort.InferenceSession.create(bytes, {
-      executionProviders: ["webgpu"],
-      graphOptimizationLevel: "all",
-    });
-    provider = "webgpu";
-  } catch (err) {
+  const loaded = await loadOnnxFromUrl(url);
+  session = loaded.session;
+  provider = loaded.provider;
+  if (loaded.warning) {
     self.postMessage({
       type: "STATUS",
-      message:
-        "WebGPU EP unavailable, using wasm: " +
-        (err instanceof Error ? err.message : String(err)),
+      message: `WebGPU EP unavailable, using wasm: ${loaded.warning}`,
     });
-    session = await ort.InferenceSession.create(bytes, {
-      executionProviders: ["wasm"],
-      graphOptimizationLevel: "all",
-    });
-    provider = "wasm";
   }
-
   self.postMessage({
     type: "READY",
     provider,
-    inputs: session.inputNames,
-    outputs: session.outputNames,
+    inputs: loaded.inputNames,
+    outputs: loaded.outputNames,
   });
 }
 

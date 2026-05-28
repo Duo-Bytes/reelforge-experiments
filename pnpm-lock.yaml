@@ -446,12 +446,12 @@ importers:
 
   apps/exp-11-ai-background:
     dependencies:
+      '@reelforge/onnx':
+        specifier: workspace:*
+        version: link:../../packages/onnx
       next:
         specifier: 16.2.4
         version: 16.2.4(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      onnxruntime-web:
-        specifier: ^1.25.1
-        version: 1.25.1
       react:
         specifier: 19.2.4
         version: 19.2.4
@@ -1067,6 +1067,12 @@ importers:
       '@huggingface/transformers':
         specifier: ^3.7.6
         version: 3.8.1
+      '@reelforge/asr':
+        specifier: workspace:*
+        version: link:../../packages/asr
+      '@reelforge/audio':
+        specifier: workspace:*
+        version: link:../../packages/audio
       next:
         specifier: 16.2.4
         version: 16.2.4(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -1307,12 +1313,15 @@ importers:
 
   apps/exp-32-silence-cut:
     dependencies:
+      '@reelforge/audio':
+        specifier: workspace:*
+        version: link:../../packages/audio
+      '@reelforge/onnx':
+        specifier: workspace:*
+        version: link:../../packages/onnx
       next:
         specifier: 16.2.4
         version: 16.2.4(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      onnxruntime-web:
-        specifier: ^1.25.1
-        version: 1.25.1
       react:
         specifier: 19.2.4
         version: 19.2.4
@@ -1353,6 +1362,9 @@ importers:
       '@jitsi/rnnoise-wasm':
         specifier: ^0.2.1
         version: 0.2.1
+      '@reelforge/audio':
+        specifier: workspace:*
+        version: link:../../packages/audio
       next:
         specifier: 16.2.4
         version: 16.2.4(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -1498,6 +1510,9 @@ importers:
       '@types/react-dom':
         specifier: ^19
         version: 19.2.3(@types/react@19.2.14)
+      '@types/w3c-web-hid':
+        specifier: ^1.0.7
+        version: 1.0.7
       '@webgpu/types':
         specifier: ^0.1.69
         version: 0.1.69
@@ -1599,6 +1614,12 @@ importers:
       '@huggingface/transformers':
         specifier: ^3.7.6
         version: 3.8.1
+      '@reelforge/asr':
+        specifier: workspace:*
+        version: link:../../packages/asr
+      '@reelforge/audio':
+        specifier: workspace:*
+        version: link:../../packages/audio
       next:
         specifier: 16.2.4
         version: 16.2.4(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -1636,6 +1657,20 @@ importers:
       typescript:
         specifier: ^5
         version: 5.9.3
+
+  packages/asr:
+    dependencies:
+      '@huggingface/transformers':
+        specifier: ^3.7.6
+        version: 3.8.1
+
+  packages/audio: {}
+
+  packages/onnx:
+    dependencies:
+      onnxruntime-web:
+        specifier: ^1.25.1
+        version: 1.25.1
 
 packages:
 
@@ -2193,6 +2228,9 @@ packages:
 
   '@types/react@19.2.14':
     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
+
+  '@types/w3c-web-hid@1.0.7':
+    resolution: {integrity: sha512-/y97wBH7fYB5vKoDIn11O1ZDMNFLCAVqZ9af0OWDN7VSO2ClErEN2HlGbBuPgHBTUmZOVx1og2ZHX1U2gEJM4Q==}
 
   '@types/wicg-file-system-access@2020.9.8':
     resolution: {integrity: sha512-ggMz8nOygG7d/stpH40WVaNvBwuyYLnrg5Mbyf6bmsj/8+gb6Ei4ZZ9/4PNpcPNTT8th9Q8sM8wYmWGjMWLX/A==}
@@ -4222,6 +4260,8 @@ snapshots:
   '@types/react@19.2.14':
     dependencies:
       csstype: 3.2.3
+
+  '@types/w3c-web-hid@1.0.7': {}
 
   '@types/wicg-file-system-access@2020.9.8': {}
 

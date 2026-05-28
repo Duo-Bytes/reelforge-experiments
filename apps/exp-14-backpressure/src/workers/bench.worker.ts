@@ -54,9 +54,7 @@ async function load(f: File): Promise<void> {
   const t0 = performance.now();
   const mp4: ISOFile<unknown, unknown> = createFile(false);
   const samples: VideoSample[] = [];
-  let cfg: CodecConfig | null = null;
-
-  const ready = new Promise<void>((resolve, reject) => {
+  const ready = new Promise<CodecConfig>((resolve, reject) => {
     mp4.onError = (err: string) => reject(new Error(err));
     mp4.onReady = (info) => {
       const vt = info.videoTracks[0];
@@ -66,7 +64,7 @@ async function load(f: File): Promise<void> {
       }
       const description = extractCodecDescription(mp4, vt.id);
       const fps = vt.nb_samples / (vt.samples_duration / vt.timescale);
-      cfg = {
+      const parsed: CodecConfig = {
         codec: vt.codec,
         description,
         width: vt.video?.width ?? 0,
@@ -75,7 +73,7 @@ async function load(f: File): Promise<void> {
       };
       mp4.setExtractionOptions(vt.id, null, { nbSamples: 1000 });
       mp4.start();
-      resolve();
+      resolve(parsed);
     };
     mp4.onSamples = (_id: number, _user: unknown, batch: Sample[]) => {
       for (const s of batch) {
@@ -101,8 +99,7 @@ async function load(f: File): Promise<void> {
     offset = end;
   }
   mp4.flush();
-  await ready;
-  if (!cfg) throw new Error("demux failed");
+  const cfg = await ready;
 
   samplesByDts = samples.sort((a, b) => a.dtsUs - b.dtsUs);
   codec = cfg;

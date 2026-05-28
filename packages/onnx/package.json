@@ -1,0 +1,12 @@
+{
+  "name": "@reelforge/onnx",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.25.1"
+  }
+}

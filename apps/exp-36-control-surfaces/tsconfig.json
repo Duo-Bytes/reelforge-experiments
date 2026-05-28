@@ -13,7 +13,7 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
-    "types": ["@webgpu/types"],
+    "types": ["@webgpu/types", "w3c-web-hid"],
     "plugins": [{ "name": "next" }],
     "paths": { "@/*": ["./src/*"] }
   },

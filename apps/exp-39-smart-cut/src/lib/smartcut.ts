@@ -5,6 +5,8 @@
 // difference motion sampled from the decoded video. All scoring runs
 // locally; nothing is uploaded.
 
+import { resampleToMono } from "@reelforge/audio";
+
 const TARGET_RATE = 16000;
 
 export type Word = { t: number; w: string };
@@ -57,33 +59,12 @@ export async function decodeForAnalysis(file: File): Promise<{
     energy.push(Math.sqrt(s / windowSamples));
   }
 
-  const pcm16k = await resampleTo16kMono(decoded);
+  const pcm16k = await resampleToMono(decoded, TARGET_RATE);
   return {
     audioEnergy: zscoreNormalize(energy),
     pcm16k,
     durationSec: decoded.duration,
   };
-}
-
-async function resampleTo16kMono(decoded: AudioBuffer): Promise<Float32Array> {
-  const offline = new OfflineAudioContext(
-    1,
-    Math.max(1, Math.ceil(decoded.duration * TARGET_RATE)),
-    TARGET_RATE,
-  );
-  const src = offline.createBufferSource();
-  src.buffer = decoded;
-  if (decoded.numberOfChannels === 1) {
-    src.connect(offline.destination);
-  } else {
-    const merger = offline.createGain();
-    merger.gain.value = 1 / decoded.numberOfChannels;
-    src.connect(merger);
-    merger.connect(offline.destination);
-  }
-  src.start();
-  const rendered = await offline.startRendering();
-  return rendered.getChannelData(0);
 }
 
 /**

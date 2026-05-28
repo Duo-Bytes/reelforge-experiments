@@ -87,11 +87,6 @@ export default function Page() {
     return () => worker.terminate();
   }, []);
 
-  // Render whenever the bitmap or mask changes.
-  useEffect(() => {
-    void renderComposite();
-  }, [imageBitmap, maskResult, showMaskOnly, bgColor]);
-
   async function ensureGPU() {
     if (gpuRef.current) return gpuRef.current;
     const canvas = canvasRef.current;
@@ -235,6 +230,15 @@ export default function Page() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  // Render whenever the bitmap or mask changes. renderComposite is async
+  // and only sets state on a later tick (error surfacing / GPU result), so
+  // the conservative React-Compiler rules don't apply here.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void renderComposite();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageBitmap, maskResult, showMaskOnly, bgColor]);
 
   const onLoadFromUrl = () => {
     setBusy(true);
