@@ -3,6 +3,7 @@
 import {
   createFile,
   MP4BoxBuffer,
+  type DataStream,
   type ISOFile,
   type Sample,
   type Movie,
@@ -13,6 +14,7 @@ import type {
   DemuxResult,
   VideoSample,
 } from "../lib/types";
+import { serializeBoxToDescription } from "../lib/mp4box-codec";
 
 type DemuxMsg = { type: "DEMUX"; file: File };
 type GopMsg = {
@@ -139,26 +141,16 @@ function extractCodecDescription(
   // the structure dynamically.
   const stbl = trak.mdia.minf.stbl;
   const entry = stbl.stsd.entries[0] as unknown as {
-    avcC?: { write: (s: { buffer: ArrayBuffer; pos: number }) => void };
-    hvcC?: { write: (s: { buffer: ArrayBuffer; pos: number }) => void };
+    avcC?: { write: (s: DataStream) => void };
+    hvcC?: { write: (s: DataStream) => void };
   };
 
   const codecBox = entry.avcC ?? entry.hvcC;
   if (!codecBox) throw new Error("no avcC/hvcC sample entry — unsupported codec");
 
-  // Use mp4box DataStream to serialize the box, then strip the 8-byte header.
-  // Easier: search known children for `.data` field.
-  const withData = codecBox as unknown as { data?: ArrayBufferLike };
-  if (withData.data) {
-    return new Uint8Array(withData.data);
-  }
-
-  // Fallback: serialize via box.write into a sized buffer.
-  const buffer = new ArrayBuffer(8 * 1024);
-  const stream = { buffer, pos: 0 };
-  codecBox.write(stream);
-  // stream.pos is total written; first 8 bytes are box size + type
-  return new Uint8Array(buffer, 8, stream.pos - 8);
+  // Serialize the avcC/hvcC box through mp4box's DataStream and strip the
+  // 8-byte box header to get the WebCodecs decoder-config description.
+  return serializeBoxToDescription(codecBox);
 }
 
 function locateGop(

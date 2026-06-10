@@ -3,6 +3,7 @@
 
 import { COMPOSITE_WGSL } from "../shaders/composite.wgsl";
 import type { CodecConfig } from "../lib/types";
+import { nextFrameIndex } from "../lib/playback";
 
 type InitMsg = { type: "INIT"; canvas: OffscreenCanvas; dpr: number };
 type LoadMsg = { type: "LOAD"; file: File };
@@ -33,6 +34,8 @@ let stepUs = Math.round(1_000_000 / 30); // overwritten on LOAD with real fps
 let lastTickMs = 0;
 let renderedFrames = 0;
 let lastFpsReportMs = 0;
+let pendingDecode = false;
+let lastFrameIndex = -1;
 
 const channel = new MessageChannel();
 channel.port2.onmessage = () => {
@@ -61,6 +64,8 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
     } else if (e.data.type === "SEEK") {
       isPlaying = false;
       playheadUs = e.data.targetUs;
+      lastFrameIndex = Math.floor(playheadUs / (stepUs > 0 ? stepUs : 1));
+      pendingDecode = true;
       requestFrame(playheadUs);
     }
   } catch (err) {
@@ -114,6 +119,8 @@ async function init(off: OffscreenCanvas, dpr: number): Promise<void> {
 async function loadFile(file: File): Promise<void> {
   if (!decoder) throw new Error("decoder not initialized");
   isPlaying = false;
+  pendingDecode = false;
+  lastFrameIndex = -1;
   if (currentFrame) {
     currentFrame.close();
     currentFrame = null;
@@ -134,6 +141,7 @@ function onDecodeMessage(e: MessageEvent): void {
       stepUs = Math.round(1_000_000 / m.config.fps);
     }
     playheadUs = 0;
+    lastFrameIndex = 0;
     self.postMessage({
       type: "LOADED",
       config: m.config,
@@ -142,12 +150,16 @@ function onDecodeMessage(e: MessageEvent): void {
       keyframeCount: m.keyframeCount,
       elapsedMs: m.elapsedMs,
     });
+    pendingDecode = true;
     requestFrame(0);
   } else if (m.type === "FRAME") {
     if (currentFrame) currentFrame.close();
     currentFrame = m.frame as VideoFrame;
+    pendingDecode = false; // decode returned — allow the next request
+    renderedFrames++; // count frames actually drawn, for accurate fps
     drawCurrent();
   } else if (m.type === "ERROR") {
+    pendingDecode = false; // don't wedge playback on a transient decode error
     self.postMessage({ type: "ERROR", message: m.message });
   }
 }
@@ -170,11 +182,19 @@ function tick(): void {
   playheadUs += Math.round(elapsedMs * 1000);
   if (playheadUs >= info.durationUs) {
     playheadUs = 0; // simple loop
+    lastFrameIndex = -1; // force a fresh request at the wrap
   }
-  requestFrame(playheadUs);
 
-  // FPS reporting once a second.
-  renderedFrames++;
+  // Backpressure + dedup: only seek when the playhead crosses into a new frame
+  // and the previous decode has returned. Prevents flooding the decode worker.
+  const idx = nextFrameIndex(playheadUs, stepUs, lastFrameIndex, pendingDecode);
+  if (idx !== null) {
+    lastFrameIndex = idx;
+    pendingDecode = true;
+    requestFrame(idx * stepUs);
+  }
+
+  // FPS reporting once a second (renderedFrames counted on actual draws).
   if (now - lastFpsReportMs >= 1000) {
     self.postMessage({
       type: "STATS",

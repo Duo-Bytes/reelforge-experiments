@@ -7,6 +7,7 @@ import {
   type Sample,
   type Track,
 } from "mp4box";
+import { serializeBoxToDescription } from "../lib/mp4box-codec";
 import {
   Output,
   Mp4OutputFormat,
@@ -395,10 +396,7 @@ function extractCodecDescription(
   };
   const codecBox = entry.avcC ?? entry.hvcC;
   if (!codecBox) throw new Error("no avcC/hvcC");
-  const withData = codecBox as unknown as { data?: ArrayBufferLike };
-  if (withData.data) return new Uint8Array(withData.data);
-  const buffer = new ArrayBuffer(8 * 1024);
-  const stream = { buffer, pos: 0 };
-  codecBox.write(stream);
-  return new Uint8Array(buffer, 8, stream.pos - 8);
+  return serializeBoxToDescription(
+    codecBox as unknown as Parameters<typeof serializeBoxToDescription>[0],
+  );
 }

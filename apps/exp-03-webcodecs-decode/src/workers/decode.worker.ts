@@ -7,6 +7,8 @@ import {
   type Sample,
   type Track,
 } from "mp4box";
+import { serializeBoxToDescription } from "../lib/mp4box-codec";
+import { tsKey } from "../lib/timestamp";
 import type { CodecConfig, VideoSample, GopRange } from "../lib/types";
 
 type LoadMsg = { type: "LOAD"; file: File };
@@ -213,7 +215,9 @@ async function seek(targetUs: number): Promise<FrameResult> {
     }
   }
   const targetSample = samples[targetIdx];
-  targetTimestampUs = targetSample.ptsUs;
+  // Key the target the same way the fed chunks are keyed: integer microseconds,
+  // matching what WebCodecs echoes back as VideoFrame.timestamp.
+  targetTimestampUs = tsKey(targetSample.ptsUs);
   activeSeekStart = performance.now();
   peakQueueSize = 0;
 
@@ -258,8 +262,8 @@ async function seek(targetUs: number): Promise<FrameResult> {
     decoder.decode(
       new EncodedVideoChunk({
         type: s.isKeyframe ? "key" : "delta",
-        timestamp: s.ptsUs,
-        duration: s.durationUs,
+        timestamp: tsKey(s.ptsUs),
+        duration: Math.round(s.durationUs),
         data,
       }),
     );
@@ -357,10 +361,7 @@ function extractCodecDescription(
   };
   const codecBox = entry.avcC ?? entry.hvcC;
   if (!codecBox) throw new Error("no avcC/hvcC");
-  const withData = codecBox as unknown as { data?: ArrayBufferLike };
-  if (withData.data) return new Uint8Array(withData.data);
-  const buffer = new ArrayBuffer(8 * 1024);
-  const stream = { buffer, pos: 0 };
-  codecBox.write(stream);
-  return new Uint8Array(buffer, 8, stream.pos - 8);
+  return serializeBoxToDescription(
+    codecBox as unknown as Parameters<typeof serializeBoxToDescription>[0],
+  );
 }

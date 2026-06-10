@@ -231,6 +231,19 @@ export default function Page() {
           </div>
         )}
 
+        {/* Canvas is always mounted — the compositor binds its WebGPU context
+            on first file load (before `info` is set), so it must not be gated. */}
+        <section className="rounded border border-zinc-300 p-4 dark:border-zinc-700">
+          <h2 className="mb-2 text-sm font-semibold">Composite</h2>
+          <canvas
+            ref={canvasRef}
+            className="aspect-video max-h-[60vh] w-full bg-zinc-900 object-contain"
+          />
+          <div className="mt-2 text-xs">
+            last render: {renderMs !== null ? fmtMs(renderMs) : "—"}
+          </div>
+        </section>
+
         {info && (
           <>
             <section className="rounded border border-zinc-300 p-4 text-xs dark:border-zinc-700">
@@ -344,17 +357,6 @@ export default function Page() {
                 >
                   stress · 1000 renders
                 </button>
-              </div>
-            </section>
-
-            <section className="rounded border border-zinc-300 p-4 dark:border-zinc-700">
-              <h2 className="mb-2 text-sm font-semibold">Composite</h2>
-              <canvas
-                ref={canvasRef}
-                className="aspect-video max-h-[60vh] w-full bg-zinc-900 object-contain"
-              />
-              <div className="mt-2 text-xs">
-                last render: {renderMs !== null ? fmtMs(renderMs) : "—"}
               </div>
             </section>
 

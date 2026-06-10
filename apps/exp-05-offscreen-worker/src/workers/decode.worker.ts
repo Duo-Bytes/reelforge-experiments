@@ -7,6 +7,8 @@ import {
   type Sample,
   type Track,
 } from "mp4box";
+import { serializeBoxToDescription } from "../lib/mp4box-codec";
+import { tsKey } from "../lib/timestamp";
 import type { CodecConfig, VideoSample, GopRange } from "../lib/types";
 
 type LoadMsg = { type: "LOAD"; file: File };
@@ -34,32 +36,48 @@ let activeReject: ((e: Error) => void) | null = null;
 let activeSeekStart = 0;
 let peakQueueSize = 0;
 
-self.onmessage = async (e: MessageEvent<InMsg>) => {
-  try {
-    if (e.data.type === "LOAD") {
-      await load(e.data.file);
-    } else if (e.data.type === "SEEK") {
-      const result = await seek(e.data.targetUs);
-      self.postMessage(
-        {
-          type: "FRAME",
-          reqId: e.data.reqId,
-          frame: result.frame,
-          decodeMs: result.decodeMs,
-          peakQueueSize: result.peakQueueSize,
-        },
-        [result.frame as unknown as Transferable],
-      );
-    } else if (e.data.type === "STRESS") {
-      await stress(e.data.iterations);
-    } else if (e.data.type === "CLOSE") {
-      shutdown();
-    }
-  } catch (err) {
-    self.postMessage({
-      type: "ERROR",
-      message: err instanceof Error ? err.message : String(err),
-    });
+// Serialize every decoder operation. Messages arrive faster than a seek can
+// decode — dragging the scrub slider fires SEEK on every input event — and the
+// single VideoDecoder cannot run overlapping seeks. Chaining them means each
+// request waits its turn instead of throwing "seek in progress". LOAD is on the
+// same chain so a SEEK that races ahead of load still waits for state.
+let opChain: Promise<void> = Promise.resolve();
+
+function reportError(err: unknown): void {
+  self.postMessage({
+    type: "ERROR",
+    message: err instanceof Error ? err.message : String(err),
+  });
+}
+
+async function runSeek(reqId: string, targetUs: number): Promise<void> {
+  const result = await seek(targetUs);
+  self.postMessage(
+    {
+      type: "FRAME",
+      reqId,
+      frame: result.frame,
+      decodeMs: result.decodeMs,
+      peakQueueSize: result.peakQueueSize,
+    },
+    [result.frame as unknown as Transferable],
+  );
+}
+
+self.onmessage = (e: MessageEvent<InMsg>) => {
+  const data = e.data;
+  if (data.type === "CLOSE") {
+    shutdown();
+    return;
+  }
+  if (data.type === "LOAD") {
+    opChain = opChain.then(() => load(data.file)).catch(reportError);
+  } else if (data.type === "SEEK") {
+    opChain = opChain
+      .then(() => runSeek(data.reqId, data.targetUs))
+      .catch(reportError);
+  } else if (data.type === "STRESS") {
+    opChain = opChain.then(() => stress(data.iterations)).catch(reportError);
   }
 };
 
@@ -213,7 +231,9 @@ async function seek(targetUs: number): Promise<FrameResult> {
     }
   }
   const targetSample = samples[targetIdx];
-  targetTimestampUs = targetSample.ptsUs;
+  // Key the target like the fed chunks: integer microseconds, matching what
+  // WebCodecs echoes back as VideoFrame.timestamp.
+  targetTimestampUs = tsKey(targetSample.ptsUs);
   activeSeekStart = performance.now();
   peakQueueSize = 0;
 
@@ -258,8 +278,8 @@ async function seek(targetUs: number): Promise<FrameResult> {
     decoder.decode(
       new EncodedVideoChunk({
         type: s.isKeyframe ? "key" : "delta",
-        timestamp: s.ptsUs,
-        duration: s.durationUs,
+        timestamp: tsKey(s.ptsUs),
+        duration: Math.round(s.durationUs),
         data,
       }),
     );
@@ -347,10 +367,7 @@ function extractCodecDescription(
   };
   const codecBox = entry.avcC ?? entry.hvcC;
   if (!codecBox) throw new Error("no avcC/hvcC");
-  const withData = codecBox as unknown as { data?: ArrayBufferLike };
-  if (withData.data) return new Uint8Array(withData.data);
-  const buffer = new ArrayBuffer(8 * 1024);
-  const stream = { buffer, pos: 0 };
-  codecBox.write(stream);
-  return new Uint8Array(buffer, 8, stream.pos - 8);
+  return serializeBoxToDescription(
+    codecBox as unknown as Parameters<typeof serializeBoxToDescription>[0],
+  );
 }

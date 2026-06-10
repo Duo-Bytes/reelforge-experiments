@@ -103,7 +103,7 @@ async function loadAsset(assetId: string, file: File): Promise<void> {
         keyframeCount: m.keyframeCount,
       });
     } else if (m.type === "FRAME") {
-      void onDecodedFrame(assetId, m.frame as VideoFrame);
+      void onDecodedFrame(m.reqId as string, m.frame as VideoFrame);
     } else if (m.type === "ERROR") {
       self.postMessage({
         type: "ERROR",
@@ -115,12 +115,11 @@ async function loadAsset(assetId: string, file: File): Promise<void> {
   decoder.postMessage({ type: "LOAD", file });
 }
 
-async function onDecodedFrame(
-  assetId: string,
-  frame: VideoFrame,
-): Promise<void> {
-  const ts = frame.timestamp;
-  const key = `${assetId}:${ts}`;
+async function onDecodedFrame(reqId: string, frame: VideoFrame): Promise<void> {
+  // Route by the requested key (carried verbatim in reqId), not frame.timestamp:
+  // the decoder returns the nearest sample PTS, which differs from the requested
+  // ts, so keying by the frame's own timestamp would never match pending/cache.
+  const key = reqId;
   const bitmap = await createImageBitmap(frame);
   frame.close();
   ram.set(key, bitmap);
@@ -150,7 +149,7 @@ function decodeBitmap(assetId: string, ts: number): Promise<ImageBitmap> {
     }
     a.decoder.postMessage({
       type: "SEEK",
-      reqId: `${assetId}-${ts}`,
+      reqId: key,
       targetUs: ts,
     });
   });

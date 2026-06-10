@@ -3,6 +3,7 @@
 
 import { CACHED_WGSL } from "../shaders/cached.wgsl";
 import { LRUCache } from "../lib/lru";
+import { reqIdForTarget, targetFromReqId } from "../lib/reqid";
 import type { CodecConfig } from "../lib/types";
 
 type InitMsg = { type: "INIT"; canvas: OffscreenCanvas };
@@ -145,23 +146,26 @@ function onDecodeMessage(e: MessageEvent): void {
       elapsedMs: m.elapsedMs,
     });
   } else if (m.type === "FRAME") {
-    void onDecodedFrame(m.frame as VideoFrame);
+    void onDecodedFrame(m.reqId as string, m.frame as VideoFrame);
   } else if (m.type === "ERROR") {
     self.postMessage({ type: "ERROR", message: m.message });
   }
 }
 
-async function onDecodedFrame(frame: VideoFrame): Promise<void> {
-  const ts = frame.timestamp;
+async function onDecodedFrame(reqId: string, frame: VideoFrame): Promise<void> {
+  // Route by the REQUESTED key, not frame.timestamp: the decoder returns the
+  // nearest sample PTS, which differs from the requested targetUs, so keying by
+  // the frame's own timestamp would never match the pending/cache entries.
+  const targetUs = targetFromReqId(reqId);
   // Move pixels off the GPU decoder texture into RAM as ImageBitmap so we can
   // free the VideoFrame immediately. Without this every cached frame would
   // pin a hardware decoder texture.
   const bitmap = await createImageBitmap(frame);
   frame.close();
-  ramCache.set(ts, bitmap);
-  const entry = pending.get(ts);
+  ramCache.set(targetUs, bitmap);
+  const entry = pending.get(targetUs);
   if (entry) {
-    pending.delete(ts);
+    pending.delete(targetUs);
     // resolvers + rejectors arrays drop with entry
     for (const r of entry.resolvers) r(bitmap);
   }
@@ -186,7 +190,7 @@ function decodeBitmap(targetUs: number): Promise<ImageBitmap> {
     pending.set(targetUs, entry);
     decoder!.postMessage({
       type: "SEEK",
-      reqId: `cache-${targetUs}`,
+      reqId: reqIdForTarget(targetUs),
       targetUs,
     });
   });
