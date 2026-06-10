@@ -20,6 +20,9 @@ export default function Page() {
   const [lift, setLift] = useState<Lift>({ r: 0, g: 0, b: 0 });
   const [scrubRate, setScrubRate] = useState(0);
   const cleanupRef = useRef<Array<() => void>>([]);
+  // HID devices this component opened, so cleanup can close them and
+  // release the OS handle. We never close devices/ports we didn't open.
+  const openedHidRef = useRef<HIDDevice[]>([]);
 
   const log = useCallback((ev: ControlEvent) => {
     setEvents((prev) => [ev, ...prev].slice(0, 200));
@@ -84,7 +87,10 @@ export default function Page() {
       });
       const labels: string[] = [];
       for (const dev of devices) {
-        if (!dev.opened) await dev.open();
+        if (!dev.opened) {
+          await dev.open();
+          openedHidRef.current.push(dev);
+        }
         labels.push(`${dev.productName} (vid=${hex(dev.vendorId)} pid=${hex(dev.productId)})`);
         const stop = bindHid(dev, onHid);
         cleanupRef.current.push(stop);
@@ -98,6 +104,11 @@ export default function Page() {
   useEffect(() => () => {
     for (const fn of cleanupRef.current) fn();
     cleanupRef.current = [];
+    // Close only the HID devices we opened, releasing the OS handle.
+    for (const dev of openedHidRef.current) {
+      if (dev.opened) void dev.close();
+    }
+    openedHidRef.current = [];
   }, []);
 
   return (

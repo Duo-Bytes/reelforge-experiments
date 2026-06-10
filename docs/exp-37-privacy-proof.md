@@ -5,8 +5,10 @@
 Demonstrate, in code and in the network panel, that an entire editing
 session (import → AI analysis → export) produces **zero outbound
 bytes**. Provide a "Privacy Mode" toggle that installs a service-worker
-CSP lockdown (`connect-src 'none'`) and an audit panel that lists every
-intercepted fetch attempt for the session.
+egress lockdown (cross-origin fetches refused with a synthetic 403) and
+an audit panel that lists every intercepted fetch attempt for the
+session. A static `Content-Security-Policy: connect-src 'self'` ships on
+every route as the defence-in-depth layer behind the runtime SW.
 
 ## App Location
 
@@ -28,8 +30,8 @@ See [`research-competitive-edge.md`](./research-competitive-edge.md) §37.
 
 | API | Where used |
 |---|---|
-| Service Worker `fetch` event | Intercept and block egress |
-| `Content-Security-Policy: connect-src 'none'` (response header) | Browser-side lockdown |
+| Service Worker `fetch` event | Intercept and block egress (runtime proof) |
+| `Content-Security-Policy: connect-src 'self'` (response header) | Browser-side egress lock (static defence-in-depth) |
 | `Reporting-Endpoints` + `Report-To` | CSP violation reports captured locally |
 | `PerformanceObserver({ type: "resource" })` | Audit of every initiated request |
 | `Storage Buckets` (Chrome 122+) | Per-project quota separation (optional) |
@@ -39,11 +41,19 @@ See [`research-competitive-edge.md`](./research-competitive-edge.md) §37.
 
 1. **Build-time:** all dependencies vendored; no runtime CDN; no
    third-party fonts (Geist Mono is local).
-2. **Response headers:** strict CSP on every route. `connect-src 'self'`
-   default; `connect-src 'none'` when privacy mode is on.
+2. **Response headers:** a static CSP ships on every route with
+   `connect-src 'self'` (set in `next.config.ts`). This is the
+   defence-in-depth layer: it blocks all cross-origin egress
+   declaratively, independent of the toggle, and is *not* tightened to
+   `'none'` because a global `'none'` would break Next.js same-origin
+   fetches, RSC navigation, and dev/HMR — `'self'` keeps the app working
+   while still proving no third-party egress. COOP/COEP stay set for
+   `SharedArrayBuffer` / WebGPU. The privacy *toggle* is enforced at the
+   service-worker layer (below), not by mutating the CSP at runtime.
 3. **Service worker:** intercepts every `fetch` and rejects anything not
    in the allowlist. Returns a synthetic 403 with a JSON body the audit
-   UI can render.
+   UI can render. This is the *runtime* proof the user watches live in
+   the Network panel, and it is what the privacy toggle flips.
 4. **CSP report-only fallback:** for the marketing site, ship the same
    CSP report-only so the dev team gets violation reports without
    breaking the app.
@@ -64,14 +74,20 @@ See [`research-competitive-edge.md`](./research-competitive-edge.md) §37.
 4. CSP violation reports are captured locally — there is no remote
    `report-uri`; the `Reporting-Endpoints` value points at a
    `same-origin` worker that stores violations in IndexedDB.
-5. Toggle off → CSP returns to normal (analytics, marketing surface
-   continues to work outside the editor).
+5. Toggle off → the SW stops refusing cross-origin fetches (a probe
+   request reaches the network and shows up as outbound in the audit
+   panel). The static CSP is unchanged by the toggle; a marketing /
+   analytics surface would relax `connect-src` per-route, scoped away
+   from the editor.
 
 ## Foot-guns
 
 - Third-party fonts, captchas, analytics, error reporters — all of
-  these will break under `connect-src 'none'`. Privacy mode is scoped
-  to the editor route only; auth and marketing pages keep normal CSP.
+  these break cross-origin egress under `connect-src 'self'`. That is the
+  point for the editor route; auth and marketing pages would relax the
+  CSP per-route. Do not tighten to `connect-src 'none'` globally — it
+  also blocks same-origin fetches and Next.js dev/HMR and would break the
+  app itself.
 - WebSockets count as `connect-src`; the editor must not open any.
 - Service Worker registration itself is a fetch — make sure it's
   registered *before* CSP tightens (one-time bootstrap).

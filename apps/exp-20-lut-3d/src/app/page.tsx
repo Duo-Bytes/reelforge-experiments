@@ -102,10 +102,23 @@ export default function Page() {
     const gpu = gpuRef.current;
     const bind = bindGroupRef.current;
     if (!gpu || !bind || !lutInfo) return;
+    const [dminR, dminG, dminB] = lutInfo.domainMin;
+    const [dmaxR, dmaxG, dmaxB] = lutInfo.domainMax;
     const params = new Float32Array([
+      // vec4: scalars
       strength,
       applyInLinear ? 1.0 : 0.0,
       lutInfo.size,
+      0,
+      // vec4: domainMin (xyz, w pad)
+      dminR,
+      dminG,
+      dminB,
+      0,
+      // vec4: domainMax (xyz, w pad)
+      dmaxR,
+      dmaxG,
+      dmaxB,
       0,
     ]);
     gpu.device.queue.writeBuffer(gpu.paramsBuffer, 0, params.buffer);

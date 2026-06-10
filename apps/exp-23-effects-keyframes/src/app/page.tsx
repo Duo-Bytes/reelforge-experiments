@@ -8,10 +8,12 @@ import {
   useState,
 } from "react";
 import {
+  editTangent,
   evaluate,
   makeKeyframe,
   normalizeTrack,
   type Keyframe,
+  type TangentMode,
 } from "../lib/keyframes";
 import {
   BRIGHTNESS,
@@ -247,9 +249,32 @@ export default function Page() {
           if (!t) return p;
           const nt = t.map((kf, j) => {
             if (j !== kfIdx) return kf;
-            if (side === "in") return { ...kf, inTangent: v };
-            return { ...kf, outTangent: v };
+            // editTangent applies locked-mode mirroring (collinear,
+            // angle-mirrored) or leaves the other handle alone if broken.
+            return editTangent(kf, side, v);
           });
+          return { ...p, tracks: { ...p.tracks, [paramKey]: nt } };
+        }),
+      );
+    },
+    [],
+  );
+
+  const setTangentMode = useCallback(
+    (
+      effectIdx: number,
+      paramKey: string,
+      kfIdx: number,
+      mode: TangentMode,
+    ) => {
+      setStack((prev) =>
+        prev.map((p, i) => {
+          if (i !== effectIdx) return p;
+          const t = p.tracks[paramKey];
+          if (!t) return p;
+          const nt = t.map((kf, j) =>
+            j === kfIdx ? { ...kf, tangentMode: mode } : kf,
+          );
           return { ...p, tracks: { ...p.tracks, [paramKey]: nt } };
         }),
       );
@@ -430,6 +455,7 @@ export default function Page() {
             sel={selected}
             onClose={() => setSelected(null)}
             onTangent={updateTangent}
+            onTangentMode={setTangentMode}
           />
         )}
 
@@ -448,6 +474,7 @@ function CurveEditor({
   sel,
   onClose,
   onTangent,
+  onTangentMode,
 }: {
   stack: EffectInstance[];
   sel: { effectIdx: number; paramKey: string; kfIdx: number };
@@ -458,6 +485,12 @@ function CurveEditor({
     kfIdx: number,
     side: "in" | "out",
     v: { x: number; y: number },
+  ) => void;
+  onTangentMode: (
+    effectIdx: number,
+    paramKey: string,
+    kfIdx: number,
+    mode: TangentMode,
   ) => void;
 }) {
   const inst = stack[sel.effectIdx];
@@ -493,9 +526,30 @@ function CurveEditor({
         <span className="font-semibold">
           Tangent editor · {inst.effect.name}/{sel.paramKey} · key #{sel.kfIdx}
         </span>
-        <button type="button" onClick={onClose} className="rounded border px-2 text-[10px]">
-          close
-        </button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1 text-[10px]">
+            <input
+              type="checkbox"
+              checked={kf.tangentMode === "locked"}
+              onChange={(e) =>
+                onTangentMode(
+                  sel.effectIdx,
+                  sel.paramKey,
+                  sel.kfIdx,
+                  e.currentTarget.checked ? "locked" : "broken",
+                )
+              }
+            />
+            <span>locked (mirror handles)</span>
+          </label>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded border px-2 text-[10px]"
+          >
+            close
+          </button>
+        </div>
       </div>
       <svg
         width={W}

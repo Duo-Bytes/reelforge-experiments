@@ -20,6 +20,30 @@ export type ParsedLUT = {
 
 export class CubeParseError extends Error {}
 
+/**
+ * Remap an input colour into normalised [0,1]^3 texture-coordinate space for
+ * a LUT with the given DOMAIN_MIN / DOMAIN_MAX. This is the exact math the
+ * WGSL sampler must perform before the 3D texture lookup:
+ *
+ *   uvw = (rgb - domainMin) / (domainMax - domainMin)
+ *
+ * For the default domain [0,0,0]..[1,1,1] this is the identity. A zero-width
+ * axis (max === min) collapses to 0 rather than producing NaN/Infinity, so a
+ * degenerate `.cube` header can't break sampling.
+ */
+export function domainNormalize(
+  rgb: readonly [number, number, number],
+  min: readonly [number, number, number],
+  max: readonly [number, number, number],
+): [number, number, number] {
+  const remap = (i: number): number => {
+    const span = max[i] - min[i];
+    if (span === 0) return 0;
+    return (rgb[i] - min[i]) / span;
+  };
+  return [remap(0), remap(1), remap(2)];
+}
+
 export function parseCube(text: string): ParsedLUT {
   let size = -1;
   let domainMin: [number, number, number] = [0, 0, 0];

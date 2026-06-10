@@ -63,6 +63,8 @@ export default function Page() {
     w.postMessage({ type: "INIT", canvas: offscreen }, [offscreen]);
     workerRef.current = w;
     return () => {
+      // terminate() tears down the worker scope, which releases its
+      // GPUDevice and all GPU resources it owns (textures, buffers, pipeline).
       w.terminate();
       workerRef.current = null;
       initRef.current = false;

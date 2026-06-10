@@ -15,12 +15,19 @@
 
 export type Vec2 = { x: number; y: number };
 
+// Whether the two tangent handles are coupled. In 'locked' mode editing one
+// handle mirrors the other so the pair stays collinear (a straight line
+// through the anchor) — standard "smooth" keyframe behaviour. In 'broken'
+// mode the handles are fully independent.
+export type TangentMode = "locked" | "broken";
+
 export type Keyframe = {
   time: number;
   value: number;
   inTangent: Vec2;
   outTangent: Vec2;
   type: "linear" | "bezier" | "hold";
+  tangentMode: TangentMode;
 };
 
 const NEWTON_ITERS = 8;
@@ -133,6 +140,49 @@ export function makeKeyframe(time: number, value: number): Keyframe {
     inTangent: { x: -0.15, y: 0 },
     outTangent: { x: 0.15, y: 0 },
     type: "bezier",
+    tangentMode: "locked",
+  };
+}
+
+// Edit one tangent handle of a keyframe, returning a new keyframe.
+//
+// When `tangentMode === 'locked'` the opposite handle is mirrored so the
+// pair stays *collinear* (a straight line through the anchor). We mirror in
+// ANGLE, not raw component: the opposite handle keeps its own length but is
+// rotated to point in the exact opposite direction of the edited handle.
+// This keeps the curve smooth (C1-continuous in direction) while preserving
+// each side's "ease" strength.
+//
+// When `tangentMode === 'broken'` the other handle is left untouched.
+export function editTangent(
+  kf: Keyframe,
+  side: "in" | "out",
+  value: Vec2,
+): Keyframe {
+  const edited: Keyframe =
+    side === "out"
+      ? { ...kf, outTangent: { ...value } }
+      : { ...kf, inTangent: { ...value } };
+
+  if (kf.tangentMode === "broken") return edited;
+
+  const otherSide = side === "out" ? "in" : "out";
+  const otherKey = otherSide === "in" ? "inTangent" : "outTangent";
+  const other = edited[otherKey];
+  const otherLen = Math.hypot(other.x, other.y);
+  const editedLen = Math.hypot(value.x, value.y);
+
+  // If the edited handle has no length we can't derive a direction; leave the
+  // other handle as-is rather than producing NaN.
+  if (editedLen === 0) return edited;
+
+  // Unit vector pointing opposite to the edited handle.
+  const ux = -value.x / editedLen;
+  const uy = -value.y / editedLen;
+
+  return {
+    ...edited,
+    [otherKey]: { x: ux * otherLen, y: uy * otherLen },
   };
 }
 

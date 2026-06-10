@@ -83,12 +83,26 @@ export function snapshotEntry(raw: PerformanceEntry): LoAFEntry {
   };
 }
 
+// Median of a numeric list. For even-length input we average the two middle
+// elements (a true median); for odd-length we take the middle one. An empty
+// list yields 0 to match the empty-stats contract in `computeStats`. Input
+// need not be pre-sorted — we sort a copy.
+export function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  if (sorted.length % 2 === 0) {
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return sorted[mid];
+}
+
 export function computeStats(entries: LoAFEntry[]): LoAFStats {
   if (entries.length === 0) {
     return { count: 0, median: 0, p95: 0, max: 0, totalForcedLayout: 0 };
   }
   const sorted = entries.map((e) => e.duration).sort((a, b) => a - b);
-  const med = sorted[Math.floor(sorted.length / 2)];
+  const med = median(sorted);
   const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
   const max = sorted[sorted.length - 1];
   let totalForced = 0;

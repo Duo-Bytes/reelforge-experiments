@@ -35,8 +35,10 @@ const post = (m: WorkerToMain): void => {
 
 const isQuotaExceeded = (err: unknown): boolean => {
   if (!err || typeof err !== "object") return false;
-  const name = (err as { name?: string }).name;
-  return name === "QuotaExceededError" || name === "QuotaExceededError";
+  const e = err as { name?: string; code?: number };
+  // Modern path is the named DOMException; the legacy DOMException exposes
+  // QUOTA_EXCEEDED_ERR (code 22) instead of a name. Accept either.
+  return e.name === "QuotaExceededError" || e.code === 22;
 };
 
 const chunkName = (i: number): string => `${CHUNK_PREFIX}${String(i).padStart(PAD, "0")}.bin`;

@@ -14,6 +14,7 @@ import {
   pipeline,
   env,
   RawImage,
+  type DeviceType,
   type ObjectDetectionPipeline,
 } from "@huggingface/transformers";
 
@@ -40,22 +41,55 @@ const createDetector = pipeline as unknown as (
 let detector: ObjectDetectionPipeline | null = null;
 let loading: Promise<ObjectDetectionPipeline> | null = null;
 
+type Provider = Extract<DeviceType, "webgpu" | "wasm">;
+
+function createOnDevice(device: Provider): Promise<ObjectDetectionPipeline> {
+  return createDetector("object-detection", REPO, {
+    device,
+    dtype: "fp32",
+    progress_callback: (p: unknown) => {
+      const e = p as { status?: string; progress?: number };
+      if (e.status === "progress" && typeof e.progress === "number") {
+        self.postMessage({ type: "LOAD", done: Math.round(e.progress) });
+      }
+    },
+  });
+}
+
 async function getDetector(): Promise<ObjectDetectionPipeline> {
   if (detector) return detector;
   if (!loading) {
-    loading = createDetector("object-detection", REPO, {
-      device: "webgpu",
-      dtype: "fp32",
-      progress_callback: (p: unknown) => {
-        const e = p as { status?: string; progress?: number };
-        if (e.status === "progress" && typeof e.progress === "number") {
-          self.postMessage({ type: "LOAD", done: Math.round(e.progress) });
-        }
-      },
-    }).then((d) => {
+    // Prefer the WebGPU EP; transparently fall back to wasm if WebGPU is
+    // unavailable (no navigator.gpu, unsupported browser, adapter failure).
+    // The promise has a catch path so a missing GPU degrades instead of
+    // leaving the worker stuck with an unhandled rejection.
+    loading = (async (): Promise<ObjectDetectionPipeline> => {
+      let provider: Provider = "webgpu";
+      let d: ObjectDetectionPipeline;
+      try {
+        d = await createOnDevice("webgpu");
+      } catch (err) {
+        provider = "wasm";
+        self.postMessage({
+          type: "FALLBACK",
+          provider,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        d = await createOnDevice("wasm");
+      }
       detector = d;
-      self.postMessage({ type: "READY" });
+      self.postMessage({ type: "READY", provider });
       return d;
+    })().catch((err) => {
+      // Both providers failed; reset so a later message can retry, and
+      // surface the error to the main thread.
+      loading = null;
+      self.postMessage({
+        type: "ERROR",
+        id: -1,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     });
   }
   return loading;
@@ -129,7 +163,9 @@ self.onmessage = async (e: MessageEvent<DetectMsg>) => {
 };
 
 // Begin downloading + initialising the model as soon as the worker spins
-// up, so the UI can flip to "ready" before the first frame is sampled.
-void getDetector();
+// up, so the UI can flip to "ready" before the first frame is sampled. The
+// rejection (if both EPs fail) is already reported to the main thread inside
+// getDetector, so swallow it here to avoid an unhandledrejection.
+getDetector().catch(() => {});
 
 export {};

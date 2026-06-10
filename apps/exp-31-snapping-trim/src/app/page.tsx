@@ -58,6 +58,9 @@ export default function Page() {
   const [tests, setTests] = useState<TestResult[]>([]);
 
   const dragRef = useRef<DragState | null>(null);
+  // Scopes the window pointermove/pointerup listeners to the current drag so
+  // aborting always removes both, even if a handler throws mid-drag.
+  const dragAbortRef = useRef<AbortController | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingPointerRef = useRef<{ clientX: number; t: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -150,25 +153,29 @@ export default function Page() {
   const onPointerUp = useCallback(() => {
     const drag = dragRef.current;
     if (!drag) return;
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+    try {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      const finalDelta = drag.liveDelta;
+      // Round to nearest 1/240 of a second (frame quantum) to avoid drift.
+      const rounded = Math.round(finalDelta * 240) / 240;
+      dispatch({
+        type: "trim",
+        mode: drag.mode,
+        clipId: drag.clipId,
+        edge: drag.edge,
+        delta: rounded,
+      });
+      dragRef.current = null;
+      setSnapTarget(null);
+    } finally {
+      // Always tear down this drag's listeners, even if dispatch throws.
+      dragAbortRef.current?.abort();
+      dragAbortRef.current = null;
     }
-    const finalDelta = drag.liveDelta;
-    // Round to nearest 1/240 of a second (frame quantum) to avoid drift.
-    const rounded = Math.round(finalDelta * 240) / 240;
-    dispatch({
-      type: "trim",
-      mode: drag.mode,
-      clipId: drag.clipId,
-      edge: drag.edge,
-      delta: rounded,
-    });
-    dragRef.current = null;
-    setSnapTarget(null);
-    window.removeEventListener("pointermove", onPointerMove);
-    window.removeEventListener("pointerup", onPointerUp);
-  }, [onPointerMove]);
+  }, []);
 
   const beginDrag = useCallback(
     (clipId: string, edge: Edge, ev: React.PointerEvent<HTMLDivElement>) => {
@@ -185,8 +192,14 @@ export default function Page() {
         startClip: c,
         liveDelta: 0,
       };
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp);
+      // Abort any prior drag's controller before starting a new one so
+      // listeners can never accumulate across repeated begin-drag cycles.
+      dragAbortRef.current?.abort();
+      const controller = new AbortController();
+      dragAbortRef.current = controller;
+      const { signal } = controller;
+      window.addEventListener("pointermove", onPointerMove, { signal });
+      window.addEventListener("pointerup", onPointerUp, { signal });
       ev.preventDefault();
     },
     [mode, state, onPointerMove, onPointerUp],
@@ -207,14 +220,14 @@ export default function Page() {
     };
   }, []);
 
-  // Cleanup any in-flight rAF on unmount.
+  // Cleanup any in-flight rAF + drag listeners on unmount.
   useEffect(() => {
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
+      dragAbortRef.current?.abort();
+      dragAbortRef.current = null;
     };
-  }, [onPointerMove, onPointerUp]);
+  }, []);
 
   const tracks = useMemo(() => {
     const s = new Set<string>();

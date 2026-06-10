@@ -87,8 +87,9 @@ export default function Page() {
       navigator.serviceWorker.removeEventListener("message", onMessage);
   }, []);
 
-  // CSP violation reports (when the real header is wired up) land on the
-  // `securitypolicyviolation` event.  Surface them in the audit log.
+  // The static CSP shipped in next.config.ts (`connect-src 'self'`) reports
+  // any blocked cross-origin egress on the `securitypolicyviolation` event.
+  // Surface those in the audit log alongside the SW-level blocks.
   useEffect(() => {
     const handler = (e: SecurityPolicyViolationEvent) => {
       setEntries((prev) =>
@@ -304,7 +305,7 @@ export default function Page() {
           <h2 className="mb-2 text-sm font-semibold">How it works / next steps</h2>
           <ul className="ml-5 list-disc space-y-1 text-zinc-600 dark:text-zinc-400">
             <li><code>public/privacy-sw.js</code> intercepts every fetch and returns a synthetic 403 for cross-origin URLs while privacy mode is on; same-origin / data: / blob: always pass.</li>
-            <li>Add strict-CSP response headers in <code>next.config.ts</code> for the editor route; gate <code>connect-src</code> by toggle as defence-in-depth.</li>
+            <li><code>next.config.ts</code> ships a static <code>Content-Security-Policy</code> with <code>connect-src &apos;self&apos;</code> as defence-in-depth: the SW is the live runtime proof, the CSP blocks cross-origin egress declaratively even for fetches the SW misses.</li>
             <li>Pre-cache ONNX model weights into the SW install step so the first run needs no network while privacy mode is on.</li>
             <li>Marketing-grade demo: scripted 60-min editing session that ends with 0 outbound bytes.</li>
           </ul>

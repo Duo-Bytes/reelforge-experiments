@@ -48,9 +48,11 @@ export async function initGpu(
     addressModeW: "clamp-to-edge",
   });
 
-  // 4 floats — matches the `Params` struct in WGSL (16-byte aligned).
+  // 12 floats — matches the `Params` struct in WGSL: a leading vec4 of
+  // scalars (strength, applyInLinear, lutSize, pad) followed by vec4
+  // domainMin and vec4 domainMax (xyz used, w padding). 48 bytes total.
   const paramsBuffer = device.createBuffer({
-    size: 16,
+    size: 48,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 

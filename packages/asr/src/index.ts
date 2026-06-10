@@ -10,6 +10,7 @@ import {
   pipeline,
   env,
   type AutomaticSpeechRecognitionPipeline,
+  type DeviceType,
 } from "@huggingface/transformers";
 
 // Always pull models from the hub; never look for ./models on the origin.
@@ -35,20 +36,75 @@ export type LoadAsrOptions = {
   dtype?: Record<string, string> | string;
 };
 
+/** Which onnxruntime execution provider the loaded pipeline ended up on. */
+export type AsrProvider = Extract<DeviceType, "webgpu" | "wasm">;
+
+export type LoadedAsr = {
+  pipe: AutomaticSpeechRecognitionPipeline;
+  /** Provider actually used; "wasm" means WebGPU was unavailable. */
+  provider: AsrProvider;
+  /** Present only when we fell back from WebGPU to wasm. */
+  warning?: string;
+};
+
+/**
+ * Load an ASR pipeline, preferring the WebGPU EP and transparently falling
+ * back to the wasm EP when WebGPU is unavailable (e.g. no `navigator.gpu`,
+ * an unsupported browser, or an adapter-request failure). The previous
+ * behaviour hard-coded `device: "webgpu"` with no catch, so it rejected on
+ * any machine without WebGPU despite the package promising a wasm fallback.
+ *
+ * Returns the pipeline plus the provider actually used (and a warning when
+ * we fell back) so callers can surface "running on CPU/wasm" in their UI.
+ * For callers that only want the pipeline, use `loadAsr` (below), which
+ * preserves the original signature.
+ */
+export async function loadAsrWithProvider(
+  repo: string,
+  opts: LoadAsrOptions = {},
+): Promise<LoadedAsr> {
+  const dtype =
+    opts.dtype ?? { encoder_model: "fp32", decoder_model_merged: "q8" };
+  const progress_callback = (p: unknown) => {
+    const e = p as { status?: string; progress?: number };
+    if (e.status === "progress" && typeof e.progress === "number") {
+      opts.onProgress?.(Math.round(e.progress));
+    }
+  };
+
+  const create = (device: AsrProvider) =>
+    createAsrPipeline("automatic-speech-recognition", repo, {
+      device,
+      dtype,
+      progress_callback,
+    });
+
+  try {
+    const pipe = await create("webgpu");
+    return { pipe, provider: "webgpu" };
+  } catch (err) {
+    const warning = err instanceof Error ? err.message : String(err);
+    const pipe = await create("wasm");
+    return { pipe, provider: "wasm", warning };
+  }
+}
+
+/**
+ * Backwards-compatible loader: returns just the pipeline. Internally uses the
+ * WebGPU→wasm fallback; if it fell back, logs the provider so it's still
+ * observable for callers that don't read the return value.
+ */
 export async function loadAsr(
   repo: string,
   opts: LoadAsrOptions = {},
 ): Promise<AutomaticSpeechRecognitionPipeline> {
-  return createAsrPipeline("automatic-speech-recognition", repo, {
-    device: "webgpu",
-    dtype: opts.dtype ?? { encoder_model: "fp32", decoder_model_merged: "q8" },
-    progress_callback: (p: unknown) => {
-      const e = p as { status?: string; progress?: number };
-      if (e.status === "progress" && typeof e.progress === "number") {
-        opts.onProgress?.(Math.round(e.progress));
-      }
-    },
-  });
+  const loaded = await loadAsrWithProvider(repo, opts);
+  if (loaded.provider === "wasm") {
+    console.warn(
+      `[@reelforge/asr] WebGPU unavailable, using wasm EP${loaded.warning ? `: ${loaded.warning}` : ""}`,
+    );
+  }
+  return loaded.pipe;
 }
 
 export type TranscribeOptions = {

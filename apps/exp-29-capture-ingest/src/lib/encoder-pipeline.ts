@@ -102,27 +102,39 @@ export async function startPipeline(
   const reader = processor.readable.getReader();
 
   void (async () => {
-    while (!stopped) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const frame = value;
-      inputFps.push(1);
-      frameCounter += 1;
-      // Drop frames if the encoder queue is too deep.
-      if (encoder.encodeQueueSize > 30) {
-        frame.close();
-        droppedFrames += 1;
-        continue;
+    try {
+      while (!stopped) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const frame = value;
+        // Drop frames if the encoder queue is too deep.
+        if (encoder.encodeQueueSize > 30) {
+          frame.close();
+          droppedFrames += 1;
+          continue;
+        }
+        // Only count frames we actually encode, so inputFps doesn't
+        // over-report when frames are dropped.
+        inputFps.push(1);
+        frameCounter += 1;
+        const keyFrame = frameCounter % 60 === 0;
+        lastFrameTs = frame.timestamp;
+        queueDepth = encoder.encodeQueueSize;
+        try {
+          encoder.encode(frame, { keyFrame });
+        } catch (err) {
+          onError(err instanceof Error ? err : new Error(String(err)));
+        } finally {
+          frame.close();
+        }
       }
-      const keyFrame = frameCounter % 60 === 0;
-      lastFrameTs = frame.timestamp;
-      queueDepth = encoder.encodeQueueSize;
+    } finally {
+      // Always release the reader so start/stop cycles don't leak it,
+      // even if read()/encode() throws mid-loop. cancel() is idempotent.
       try {
-        encoder.encode(frame, { keyFrame });
-      } catch (err) {
-        onError(err instanceof Error ? err : new Error(String(err)));
-      } finally {
-        frame.close();
+        await reader.cancel();
+      } catch {
+        // ignore
       }
     }
   })().catch((err: unknown) => {

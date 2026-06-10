@@ -33,7 +33,69 @@ export default function Page() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [loadPct, setLoadPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [outboundBytes] = useState(0);
+  const [outboundBytes, setOutboundBytes] = useState(0);
+
+  // Privacy instrument: wrap globalThis.fetch and tally the byte length of
+  // any REQUEST BODY sent to a cross-origin URL. Model weights are INBOUND
+  // (response bodies) and are therefore never counted — only payloads that
+  // actually leave this origin do. This makes the "zero outbound bytes"
+  // claim falsifiable: if any audio/video ever got uploaded, this counter
+  // would tick up. Installed early and restored on unmount. (Worker fetches
+  // for model weights are inbound and likewise don't affect this number.)
+  useEffect(() => {
+    const original = globalThis.fetch.bind(globalThis);
+    const origin = globalThis.location?.origin;
+
+    const isCrossOrigin = (url: string): boolean => {
+      try {
+        const u = new URL(url, globalThis.location?.href);
+        return !!origin && u.origin !== origin;
+      } catch {
+        return false;
+      }
+    };
+
+    const bodyBytes = (body: BodyInit | null | undefined): number => {
+      if (body == null) return 0;
+      if (typeof body === "string") return new TextEncoder().encode(body).length;
+      if (body instanceof Blob) return body.size;
+      if (body instanceof ArrayBuffer) return body.byteLength;
+      if (ArrayBuffer.isView(body)) return body.byteLength;
+      if (body instanceof URLSearchParams)
+        return new TextEncoder().encode(body.toString()).length;
+      // FormData / ReadableStream: size isn't synchronously knowable, but the
+      // mere presence of an outbound body is the signal that matters, so we
+      // count a sentinel of 1 byte rather than under-reporting it as zero.
+      return 1;
+    };
+
+    const wrapped: typeof fetch = (input, init) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      // Only request payloads leaving the origin count as "outbound".
+      if (isCrossOrigin(url)) {
+        let n = 0;
+        if (init?.body != null) {
+          n = bodyBytes(init.body);
+        } else if (input instanceof Request && input.body != null) {
+          // A Request built with a streaming body: size isn't synchronously
+          // known, but its presence is the privacy signal, so count 1 byte.
+          n = 1;
+        }
+        if (n > 0) setOutboundBytes((b) => b + n);
+      }
+      return original(input as RequestInfo | URL, init);
+    };
+
+    globalThis.fetch = wrapped;
+    return () => {
+      globalThis.fetch = original;
+    };
+  }, []);
 
   useEffect(() => {
     const w = new Worker(

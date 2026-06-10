@@ -156,7 +156,7 @@ Main Thread (React + Zustand UI)
 | 34 | Saliency-Driven Auto-Reframe | 16:9 → 9:16 / 1:1 / 4:5 reformat with on-device subject tracking | ONNX saliency, `VideoFrame.copyTo`, WGSL crop+rescale, Catmull-Rom smoothing | 04, 11 | Medium |
 | 35 | WebGPU Compute Scopes | Luma WFM, RGB parade, vectorscope, histogram via WGSL compute | `GPUComputePipeline`, atomic `r32uint` bins, `bitmaprenderer` mirror | 04, 05, 13 | Medium |
 | 36 | Hardware Control Surfaces | X-Touch Mini → lift/gamma/gain; ShuttlePro → jog/scrub; zero install | `navigator.requestMIDIAccess`, `navigator.hid.requestDevice`, per-device parsers | 04, 09 | Low |
-| 37 | Provable Privacy Mode | CSP lockdown + live audit panel proves zero outbound bytes per session | Service Worker `fetch` interception, strict CSP `connect-src 'none'`, `PerformanceObserver`, attestation export | — | Low |
+| 37 | Provable Privacy Mode | CSP lockdown + live audit panel proves zero outbound bytes per session | Service Worker `fetch` interception, static CSP `connect-src 'self'`, `PerformanceObserver`, attestation export | — | Low |
 | 38 | Plugin / Effect SDK | WGSL + JSON Schema plugins in a sandbox worker, hot-reload < 200 ms | `Worker` (module), `device.createShaderModule`, `FileSystemObserver`, WGSL preprocessor | 04, 05, 23 | High |
 | 39 | On-Device Smart-Cut | Long-form → top-N ranked short candidates, on-device, frame-accurate | Whisper-tiny / Moonshine via `onnxruntime-web`, low-res WebCodecs decode, score reweight | 25, 26, 23 | High |
 
@@ -209,7 +209,7 @@ has not been measured here.
 | 34 | Auto-Reframe | ✅ real † | YOLOS-tiny via `@reelforge/asr`-style Transformers.js; brightness fallback pre-load |
 | 35 | WebGPU Compute Scopes | ✅ real † | WGSL compute, `atomic<u32>` bins |
 | 36 | Hardware Control Surfaces | ✅ real | WebMIDI + WebHID; X-Touch Mini + ShuttlePro decoders |
-| 37 | Provable Privacy Mode | ✅ real | service worker blocks cross-origin egress; live audit |
+| 37 | Provable Privacy Mode | ✅ real | service worker blocks cross-origin egress (runtime); static CSP `connect-src 'self'` is defence-in-depth; live audit |
 | 38 | Plugin / Effect SDK | ✅ real † | real WGSL compile in a sandbox worker; live preview |
 | 39 | On-Device Smart-Cut | ✅ real † | Whisper transcript + audio energy + video frame-diff motion |
 

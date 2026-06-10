@@ -37,6 +37,12 @@ struct Params {
   applyInLinear: f32,   // 1.0 = decode sRGB before sample, encode after; 0.0 = sample in encoded space
   lutSize: f32,         // N. Used to clamp into the half-texel margin.
   _pad: f32,
+  // DOMAIN_MIN / DOMAIN_MAX from the .cube header. The input colour is
+  // remapped into [0,1]^3 by (rgb - domainMin)/(domainMax - domainMin)
+  // before the texture lookup. Stored as vec4 (xyz used, w padding) so the
+  // host can write a tightly-packed Float32Array with std140 alignment.
+  domainMin: vec4<f32>,
+  domainMax: vec4<f32>,
 };
 
 @group(0) @binding(0) var lutTex: texture_3d<f32>;
@@ -86,14 +92,27 @@ fn rampColor(uv: vec2<f32>) -> vec3<f32> {
   }
 }
 
+// Remap an input colour into [0,1] cubed LUT space using the .cube domain.
+// Mirrors the pure TS helper domainNormalize in lib/cube.ts. A zero-width
+// axis collapses to 0 instead of producing NaN.
+fn domainNormalize(rgb: vec3<f32>) -> vec3<f32> {
+  let span = params.domainMax.xyz - params.domainMin.xyz;
+  let safeSpan = select(span, vec3<f32>(1.0), span == vec3<f32>(0.0));
+  let uvw = (rgb - params.domainMin.xyz) / safeSpan;
+  // A genuinely zero-width axis maps everything to 0.
+  return select(uvw, vec3<f32>(0.0), span == vec3<f32>(0.0));
+}
+
 fn applyLut(rgb: vec3<f32>) -> vec3<f32> {
-  // Sample in [0,1]^3. Texture filtering already clamps to edge.
+  // First remap the input through the LUT's DOMAIN_MIN/MAX into [0,1]^3,
+  // then sample. Texture filtering already clamps to edge.
   // We bias the coords by half a texel so we land on cell centres — this is
   // the standard fix for sampling a discretised LUT with linear filtering.
+  let uvw = domainNormalize(rgb);
   let N = params.lutSize;
   let scale = (N - 1.0) / N;
   let bias = 0.5 / N;
-  let c = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * scale + vec3<f32>(bias);
+  let c = clamp(uvw, vec3<f32>(0.0), vec3<f32>(1.0)) * scale + vec3<f32>(bias);
   return textureSampleLevel(lutTex, lutSamp, c, 0.0).rgb;
 }
 

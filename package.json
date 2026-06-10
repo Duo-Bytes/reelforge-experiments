@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "pnpm --filter $FILTER dev",
     "build": "pnpm -r build",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
   }
 }

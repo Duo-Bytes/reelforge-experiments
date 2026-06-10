@@ -40,6 +40,8 @@ let baseView: GPUTextureView | null = null;
 let uniformBuf: GPUBuffer | null = null;
 let pipeline: GPURenderPipeline | null = null;
 let bindGroup: GPUBindGroup | null = null;
+// Set once the GPUDevice is lost; the worker must stop issuing GPU work.
+let deviceLost = false;
 
 self.onmessage = async (e: MessageEvent<InMsg>) => {
   try {
@@ -61,6 +63,12 @@ async function init(canvas: OffscreenCanvas): Promise<void> {
   device = await adapter.requestDevice();
   device.lost.then((info) => {
     self.postMessage({ type: "ERROR", message: `device lost: ${info.message}` });
+    // Device is gone — mark the worker unusable so render()/compile() stop
+    // issuing GPU work against a dead device.
+    deviceLost = true;
+    device = null;
+    pipeline = null;
+    bindGroup = null;
   });
 
   ctx = canvas.getContext("webgpu") as GPUCanvasContext | null;
@@ -116,6 +124,7 @@ function makeBaseTexture(dev: GPUDevice): GPUTexture {
 }
 
 async function compile(code: string, params: ParamSpec[]): Promise<void> {
+  if (deviceLost) throw new Error("GPU device lost");
   if (!device || !sampler || !baseView || !uniformBuf) {
     throw new Error("worker not initialised");
   }
@@ -123,7 +132,7 @@ async function compile(code: string, params: ParamSpec[]): Promise<void> {
 
   // Compile host vertex + plugin fragment in one module so they share the
   // uv interface. Real WGSL diagnostics come from getCompilationInfo().
-  const shaderModule = device.createShaderModule({ code: `${HOST_VS}\n${code}` });
+  let shaderModule: GPUShaderModule | null = device.createShaderModule({ code: `${HOST_VS}\n${code}` });
   const info = await shaderModule.getCompilationInfo();
   const messages = info.messages.map((m) => ({
     type: m.type,
@@ -131,6 +140,8 @@ async function compile(code: string, params: ParamSpec[]): Promise<void> {
     line: m.lineNum,
   }));
   if (messages.some((m) => m.type === "error")) {
+    // Drop the failed module so it can be GC'd; never reaches the pipeline.
+    shaderModule = null;
     self.postMessage({ type: "COMPILED", ok: false, ms: performance.now() - t0, messages });
     return;
   }
@@ -153,6 +164,9 @@ async function compile(code: string, params: ParamSpec[]): Promise<void> {
     if (validationError) {
       messages.push({ type: "error", message: validationError.message, line: 0 });
     }
+    // Drop the failed module + pipeline so they don't dangle and can be GC'd.
+    shaderModule = null;
+    newPipeline = null;
     self.postMessage({ type: "COMPILED", ok: false, ms: performance.now() - t0, messages });
     return;
   }
@@ -183,7 +197,7 @@ function updateParams(values: Record<string, ParamValue>, specs: ParamSpec[]): v
 }
 
 function render(): void {
-  if (!device || !ctx || !pipeline || !bindGroup) return;
+  if (deviceLost || !device || !ctx || !pipeline || !bindGroup) return;
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
     colorAttachments: [
