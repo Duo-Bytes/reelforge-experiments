@@ -1,3 +1,20 @@
+/**
+ * Convert a track-timescale duration/timestamp into integer microseconds.
+ *
+ * WebCodecs stores a chunk's `timestamp` as an int64 (µs) and truncates any
+ * fractional value; the decoder then echoes that same integer back on the
+ * output `VideoFrame.timestamp`. The export pipeline matches a decoded frame to
+ * its request with `frame.timestamp === pendingTarget`, so the PTS we store
+ * MUST be the integer the decoder will emit. `(units * 1e6) / timescale` is
+ * fractional for any timescale that doesn't divide 1e6 evenly (e.g. 90000 @
+ * 30fps → 33333.333…); a stored float never `===` the 33333 reported back, and
+ * getSourceFrame times out ("source decode timeout @ Nus"). Round to the
+ * integer the decoder reports.
+ */
+export function toMicros(units: number, timescale: number): number {
+  return Math.round((units * 1_000_000) / timescale);
+}
+
 export type VideoSample = {
   /** Composition (presentation) timestamp in microseconds */
   ptsUs: number;

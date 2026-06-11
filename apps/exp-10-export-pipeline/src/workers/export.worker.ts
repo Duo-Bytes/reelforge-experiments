@@ -21,7 +21,7 @@ import {
   ArrayBufferTarget as MP4MuxerArrayBufferTarget,
 } from "mp4-muxer";
 import { COMPOSITE_WGSL } from "../shaders/composite.wgsl";
-import type { CodecConfig, VideoSample } from "../lib/types";
+import { toMicros, type CodecConfig, type VideoSample } from "../lib/types";
 
 type ExportMsg = {
   type: "EXPORT";
@@ -102,20 +102,29 @@ async function runExport(msg: ExportMsg): Promise<void> {
 
   // 2) Setup source decoder (single-frame deliver model)
   let pendingResolve: ((f: VideoFrame) => void) | null = null;
+  let pendingReject: ((e: Error) => void) | null = null;
   let pendingTarget = -1;
   const sourceDecoder = new VideoDecoder({
     output: (frame) => {
       if (frame.timestamp === pendingTarget && pendingResolve) {
         const r = pendingResolve;
         pendingResolve = null;
+        pendingReject = null;
         pendingTarget = -1;
         r(frame);
       } else {
         frame.close();
       }
     },
+    // Throwing here lands in a void async callback and is swallowed — the
+    // pending getSourceFrame() would just hit its 5s timeout, masking the real
+    // cause. Reject the in-flight request so the true error surfaces.
     error: (err) => {
-      throw new Error(`source decoder: ${err.message}`);
+      const rej = pendingReject;
+      pendingResolve = null;
+      pendingReject = null;
+      pendingTarget = -1;
+      rej?.(new Error(`source decoder: ${err.message}`));
     },
   });
   sourceDecoder.configure({
@@ -128,6 +137,7 @@ async function runExport(msg: ExportMsg): Promise<void> {
   async function getSourceFrame(targetUs: number): Promise<VideoFrame> {
     if (pendingResolve) {
       pendingResolve = null;
+      pendingReject = null;
       pendingTarget = -1;
     }
     // Find target sample by PTS, walk to GOP, feed in DTS order, await frame.
@@ -165,8 +175,9 @@ async function runExport(msg: ExportMsg): Promise<void> {
       await msg.file.slice(minOff, maxOff).arrayBuffer(),
     );
 
-    const result = new Promise<VideoFrame>((resolve) => {
+    const result = new Promise<VideoFrame>((resolve, reject) => {
       pendingResolve = resolve;
+      pendingReject = reject;
     });
 
     for (const s of feed) {
@@ -407,9 +418,12 @@ async function demux(file: File): Promise<{
     mp4.onSamples = (_id: number, _u: unknown, batch: Sample[]) => {
       for (const s of batch) {
         samples.push({
-          ptsUs: (s.cts * 1_000_000) / s.timescale,
-          dtsUs: (s.dts * 1_000_000) / s.timescale,
-          durationUs: (s.duration * 1_000_000) / s.timescale,
+          // Integer µs — must equal the timestamp WebCodecs echoes on decoded
+          // frames, else the `frame.timestamp === pendingTarget` match in the
+          // source-decoder output callback never fires. See toMicros.
+          ptsUs: toMicros(s.cts, s.timescale),
+          dtsUs: toMicros(s.dts, s.timescale),
+          durationUs: toMicros(s.duration, s.timescale),
           offset: s.offset,
           size: s.size,
           isKeyframe: s.is_sync,

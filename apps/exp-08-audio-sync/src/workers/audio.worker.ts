@@ -8,7 +8,12 @@ import {
   type InputAudioTrack,
   type EncodedPacket,
 } from "mediabunny";
-import { ringWrite, resetRing } from "../lib/ringBuffer";
+import {
+  ringWrite,
+  resetRing,
+  ringFreeFloats,
+  HEADER_INTS,
+} from "../lib/ringBuffer";
 
 type StartMsg = {
   type: "START";
@@ -124,10 +129,28 @@ async function pump(
       ? await sink.getKeyPacket(startSec)
       : await sink.getFirstPacket();
 
+  // Cap the decoder's in-flight queue so that, once we stop feeding because the
+  // ring is full, only a bounded number of packets can still emit into it.
+  const MAX_QUEUE = 8;
+  // Keep the ring at roughly half-full: that's a comfortable read-side cushion
+  // (~341 ms) and leaves the other half free to absorb the in-flight queue
+  // draining after we pause feeding, so the writer never overruns the reader.
+  const capacityFloats = new Int32Array(sab, 0, HEADER_INTS)[2];
+  const RESERVE_FLOATS = Math.floor(capacityFloats / 2);
+
   while (pkt && !stop) {
-    while (decoder.decodeQueueSize > 8) {
-      await new Promise((r) => setTimeout(r, 1));
+    // Backpressure: decode runs faster than playback, so pace the producer to
+    // the reader. Wait while the decoder queue is deep OR the ring lacks room
+    // for the in-flight queue to drain. Without this the writer laps the
+    // reader and overwrites unread samples (garbled audio after one ring).
+    while (
+      !stop &&
+      (decoder.decodeQueueSize > MAX_QUEUE ||
+        ringFreeFloats(sab) < RESERVE_FLOATS)
+    ) {
+      await new Promise((r) => setTimeout(r, 4));
     }
+    if (stop) break;
     decoder.decode(pkt.toEncodedAudioChunk());
     pkt = await sink.getNextPacket(pkt);
   }

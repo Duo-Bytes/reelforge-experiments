@@ -14,7 +14,7 @@
  */
 
 export const HEADER_INTS = 4;
-export const DEFAULT_FRAMES = 1 << 14; // 16384 frames @ 48kHz ~ 341 ms
+export const DEFAULT_FRAMES = 1 << 15; // 32768 frames @ 48kHz ~ 682 ms
 export const DEFAULT_CHANNELS = 2;
 
 export function bufferBytesFor(frames: number, channels: number): number {
@@ -31,7 +31,15 @@ export function createRingBuffer(
   return sab;
 }
 
-/** Worker: write interleaved float samples. Drops oldest if reader is too slow. */
+/**
+ * Worker: write interleaved float samples.
+ *
+ * This does NOT guard against overrun — it blindly writes at `writeIndex`. The
+ * producer is responsible for pacing itself to the reader via `ringFreeFloats`
+ * before calling this (see audio.worker.ts). Decode runs much faster than line
+ * rate; without that pacing the writer laps the reader and overwrites unread
+ * samples, corrupting playback after one ring's worth of audio.
+ */
 export function ringWrite(sab: SharedArrayBuffer, samples: Float32Array): void {
   const header = new Int32Array(sab, 0, HEADER_INTS);
   const capacity = Atomics.load(header, 2);
@@ -42,6 +50,21 @@ export function ringWrite(sab: SharedArrayBuffer, samples: Float32Array): void {
     w++;
   }
   Atomics.store(header, 0, w);
+}
+
+/** Producer-side: floats currently buffered (written but not yet read). */
+export function ringFillFloats(sab: SharedArrayBuffer): number {
+  const header = new Int32Array(sab, 0, HEADER_INTS);
+  const w = Atomics.load(header, 0);
+  const r = Atomics.load(header, 1);
+  return Math.max(0, w - r);
+}
+
+/** Producer-side: floats of free space remaining before the ring is full. */
+export function ringFreeFloats(sab: SharedArrayBuffer): number {
+  const header = new Int32Array(sab, 0, HEADER_INTS);
+  const capacity = Atomics.load(header, 2);
+  return capacity - ringFillFloats(sab);
 }
 
 /** Reader: report current write/read counters + underrun count. */
